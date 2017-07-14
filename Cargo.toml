@@ -1,6 +1,6 @@
 [package]
-name = "ebbflow"
+name = "tobytcp"
 version = "0.1.0"
-authors = ["ashley"]
+authors = ["gorup"]
 
 [dependencies]
