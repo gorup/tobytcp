@@ -3,4 +3,8 @@ name = "tobytcp"
 version = "0.1.0"
 authors = ["gorup"]
 
+[[bin]]
+name = "tobytcp-example-server-and-client"
+path = "src/example-server-and-client.rs"
+
 [dependencies]

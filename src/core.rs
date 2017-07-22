@@ -1,112 +1,86 @@
 use std::convert::TryFrom;
 use std::net::{Shutdown, TcpStream};
 use std::io::{Read, Write, Error, ErrorKind};
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 
-/// A `Sender` will send a segment of data through a [`TcpStream`]
+/// A `Messenger` will read from a [`TcpStream`] and call your callback with messages
 ///
 /// # Examples
 /// ```
-/// use std::net::TcpStream;
-/// use tobytcp::core::{Processor}
+/// use tobytcp::core::Messenger;
 ///
 /// fn handle_message(message: Vec<u8>) {
 ///     // ...
 /// }
 ///
-/// let tcp_stream = // refer to TcpStream docs
-///
-/// let sender = Sender::new(tcp_stream);
-/// sender.send(vec![1u8; 64]); // sends 64 1's
 /// ```
 ///
 /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
-pub struct Sender {
+pub struct Messenger {
     tcp_stream: TcpStream,
+    send_c: (Sender<Vec<u8>>, Receiver<Vec<u8>>),
+    rawdata_c: (Sender<Vec<u8>>, Receiver<Vec<u8>>),
+    processed_c: (Sender<Vec<u8>>, Receiver<Vec<u8>>),
 }
 
-impl Sender {
-    /// Creates a new `Sender`, provide the [`TcpStream`] to send messages through
+impl Messenger {
+    /// Creates a new `Messenger`. Your callback function will
+    /// be executed once a message has been received in
+    /// its entirety.
     ///
-    /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
-    pub fn new(tcp_stream: TcpStream) -> Sender {
-        Sender {
+    /// The callback function will be executed in a child thread of the `Messenger`
+    pub fn new(tcp_stream: TcpStream) -> Messenger {
+        Messenger {
             tcp_stream: tcp_stream,
+            send_c: channel(),
+            rawdata_c: channel(),
+            processed_c: channel(),
         }
+    }
+
+    pub fn start(&mut self) {
+        println!("starting");
+
+        println!("starting thread that receives from tcp");
+        self.consume_tcp_stream();
+
+        // thread somehow, needs almost everything
+        println!("starting thread that receives raw data");
+        self.consume_rawdata();
+
+        // thread somehow, needs stream and send_c.1
+        println!("starting thread that will consume messages sent by cust");
+        self.consume_sends();
+
+        println!("done starting");
     }
 
     /// Send data over the [`TcpStream`] that you gave in the constructor
     ///
     /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
-    pub fn send(&mut self, data: Vec<u8>) {
+    pub fn send(&mut self, mut data: Vec<u8>) {
         let data_len_64 = u64::try_from(data.len()).unwrap();
         data_len_64.to_le();
 
-        // Protocol says we need 8 bytes to describe the length,
-        // first send the pad bytes then get to the real bytes
-        self.tcp_stream.write(&bytes_from(data_len_64)).unwrap();
+        let mut message = bytes_from(data_len_64).to_vec();
+        message.append(&mut data);
 
-        // Write the data! Yay!
-        self.tcp_stream.write(data.as_slice()).unwrap();
-    }
-}
-
-/// A `Processor` will read from a [`TcpStream`] and call your callback with messages
-///
-/// # Examples
-/// ```
-/// use tobytcp::core::{Processor}
-///
-/// fn handle_message(message: Vec<u8>) {
-///     // ...
-/// }
-///
-/// let tcp_listener = // refer to their docs
-///
-/// for stream in listener.incoming() {
-///     Ok(stream) => {
-///         /*
-///          * p.listen() blocks, thread never stops!
-///          * To gracefully shutdown, call p.shutdown() via sending
-///          * a message to this thread
-///          */
-///         let mut p = core::Processor::new(stream, consume_bytes);
-///         p.listen();
-///     }
-///     Err(e) => // ...
-/// }
-///
-/// ```
-///
-/// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
-pub struct Processor {
-    master_buffer: Vec<u8>,
-    callback: fn(Vec<u8>),
-    curr_chunk_size: Option<u64>,
-    tcp_stream: TcpStream,
-}
-
-impl Processor {
-    /// Creates a new `Processor`. Your callback function will
-    /// be executed once a message has been received in
-    /// its entirety.
-    ///
-    /// The callback function will be **BLOCKING** as of now
-    pub fn new(tcp_stream: TcpStream, callback: fn(Vec<u8>)) -> Processor {
-        Processor {
-            master_buffer: Vec::new(),
-            callback: callback,
-            curr_chunk_size: None,
-            tcp_stream: tcp_stream,
-        }
+        self.send_c.0.send(message);
     }
 
-    /// Listen will begin to listen on the TcpStream passed in through the
-    /// constructor. This will call the callback function when an entire
-    /// message is produced
-    ///
-    /// This is **BLOCKING**, so call this in a separate thread if you want
-    /// your application to do anything
-    pub fn listen(&mut self) {
+    // TODO: Somehow get receivers to cusotmer for complete messages
+
+    /// Stop processing data and terminate the TcpStream. Call this to gracefully
+    /// turn off a `Messenger` and shutdown all threads
+    pub fn shutdown(&mut self) {
+        self.shutdown_stream();
+    }
+
+    /// shutdown_stream will swallow the case that the stream was not connected.
+    // consumes tcp stream, sends tata to rawdata_c
+    fn consume_tcp_stream(&mut self) {
         let mut read_bytes = 0;
         let mut zeroes_seen = 0; // super ugly
         loop {
@@ -116,8 +90,8 @@ impl Processor {
                 Err(e) => println!("error from reading: {:?}", e)
             }
 
-			if read_bytes > 0 {
-				self.process_data(buf[0..read_bytes].to_vec());
+            if read_bytes > 0 {
+                self.rawdata_c.0.send(buf.to_vec());
 				zeroes_seen = 0;
 			} else {
 				zeroes_seen += 1;
@@ -130,44 +104,50 @@ impl Processor {
         }
     }
 
-    /// Stop processing data and terminate the TcpStream. Call this to gracefully
-    /// turn off a Processor
-    pub fn shutdown(&mut self) {
-        self.shutdown_stream();
-    }
+    fn consume_rawdata(&mut self) {
+        let mut buf = Vec::new();
+        let mut curr_chunk_size = None;
+        loop {
+            match self.rawdata_c.1.recv() {
+                Ok(mut bytes) => {
+                    buf.append(&mut bytes);
+                }
+                Err(e) => println!("error consuming raw data {}", e)
+            }
+            // should be a method....
+            if buf.len() >= 8 && curr_chunk_size.is_none() {
+                curr_chunk_size = Some(bytes_to(&buf[0..8]));
+                buf.drain(0..8);
+            }
 
-    fn process_data(&mut self, mut buffer: Vec<u8>) {
-        self.master_buffer.append(&mut buffer);
-        self.set_curr_chunk_size(); // tries to set curr chunk size
-
-        // while we know how many bytes to look for, and we have at least enough
-        // bytes to process a message, process messages
-        while self.curr_chunk_size.is_some()
-            && self.master_buffer.len() >= to_usize(self.curr_chunk_size.unwrap()) {
-                (self.callback)(self.drain_message());
-                self.curr_chunk_size = None; // BAD!! We need to reset it better
-                self.set_curr_chunk_size();
+            while curr_chunk_size.is_some()
+                && buf.len() >= to_usize(curr_chunk_size.unwrap()) {
+                    let mut x = buf.drain(0..to_usize(curr_chunk_size.unwrap())).collect();
+                    self.processed_c.0.send(x);
+                    curr_chunk_size = None; // BAD!! We need to reset it better
+                    if buf.len() >= 8 {
+                        curr_chunk_size = Some(bytes_to(&buf[0..8]));
+                        buf.drain(0..8);
+                    }
+            }
         }
     }
 
-    fn set_curr_chunk_size(&mut self) {
-        // If 8 bytes in buffer, and length not set, set it
-        if self.master_buffer.len() >= 8 && self.curr_chunk_size.is_none() {
-            self.curr_chunk_size = Some(bytes_to(&self.master_buffer[0..8]));
-            self.master_buffer.drain(0..8); // get rid of the length bytes now that we know the length
+    fn consume_sends(&mut self) {
+        loop {
+            match self.send_c.1.recv() {
+                Ok(message) => {
+                    self.tcp_stream.write(message.as_slice()).unwrap();
+                }
+                Err(e) => println!("error in send_consumer {:?}", e)
+            }
         }
     }
 
-    // might copy ugh
-    fn drain_message(&mut self) -> Vec<u8> {
-        self.master_buffer.drain(0..to_usize(self.curr_chunk_size.unwrap())).collect()
-    }
-
-    /// shutdown_stream will swallow the case that the stream was not connected.
     /// The returned optional is of the error
     fn shutdown_stream(&mut self) -> Option<Error> {
         match self.tcp_stream.shutdown(Shutdown::Both) {
-            Ok(()) => {
+            Ok(_) => {
                 println!("Successful shutdown");
                 return None;
             }
