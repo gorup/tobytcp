@@ -2,20 +2,82 @@ use std::convert::TryFrom;
 use std::net::{Shutdown, TcpStream};
 use std::io::{Read, Write, Error, ErrorKind};
 
-/// send data through an existing tcp stream with this
-pub fn send(data: Vec<u8>, mut stream: &TcpStream) {
-    let data_len_64 = u64::try_from(data.len()).unwrap();
-    data_len_64.to_le();
-
-    // Protocol says we need 8 bytes to describe the length,
-    // first send the pad bytes then get to the real bytes
-    stream.write(&bytes_from(data_len_64)).unwrap();
-
-    // Write the data! Yay!
-    stream.write(data.as_slice()).unwrap();
+/// A `Sender` will send a segment of data through a [`TcpStream`]
+///
+/// # Examples
+/// ```
+/// use std::net::TcpStream;
+/// use tobytcp::core::{Processor}
+///
+/// fn handle_message(message: Vec<u8>) {
+///     // ...
+/// }
+///
+/// let tcp_stream = // refer to TcpStream docs
+///
+/// let sender = Sender::new(tcp_stream);
+/// sender.send(vec![1u8; 64]); // sends 64 1's
+/// ```
+///
+/// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
+pub struct Sender {
+    tcp_stream: TcpStream,
 }
 
-/// A Processor will read from a TcpStream and call your callback with messages
+impl Sender {
+    /// Creates a new `Sender`, provide the [`TcpStream`] to send messages through
+    ///
+    /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
+    pub fn new(tcp_stream: TcpStream) -> Sender {
+        Sender {
+            tcp_stream: tcp_stream,
+        }
+    }
+
+    /// Send data over the [`TcpStream`] that you gave in the constructor
+    ///
+    /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
+    pub fn send(&mut self, data: Vec<u8>) {
+        let data_len_64 = u64::try_from(data.len()).unwrap();
+        data_len_64.to_le();
+
+        // Protocol says we need 8 bytes to describe the length,
+        // first send the pad bytes then get to the real bytes
+        self.tcp_stream.write(&bytes_from(data_len_64)).unwrap();
+
+        // Write the data! Yay!
+        self.tcp_stream.write(data.as_slice()).unwrap();
+    }
+}
+
+/// A `Processor` will read from a [`TcpStream`] and call your callback with messages
+///
+/// # Examples
+/// ```
+/// use tobytcp::core::{Processor}
+///
+/// fn handle_message(message: Vec<u8>) {
+///     // ...
+/// }
+///
+/// let tcp_listener = // refer to their docs
+///
+/// for stream in listener.incoming() {
+///     Ok(stream) => {
+///         /*
+///          * p.listen() blocks, thread never stops!
+///          * To gracefully shutdown, call p.shutdown() via sending
+///          * a message to this thread
+///          */
+///         let mut p = core::Processor::new(stream, consume_bytes);
+///         p.listen();
+///     }
+///     Err(e) => // ...
+/// }
+///
+/// ```
+///
+/// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
 pub struct Processor {
     master_buffer: Vec<u8>,
     callback: fn(Vec<u8>),
@@ -24,11 +86,11 @@ pub struct Processor {
 }
 
 impl Processor {
-    /// Creates a new processor, callback function will
+    /// Creates a new `Processor`. Your callback function will
     /// be executed once a message has been received in
     /// its entirety.
     ///
-    /// The callback function will be BLOCKING as of now
+    /// The callback function will be **BLOCKING** as of now
     pub fn new(tcp_stream: TcpStream, callback: fn(Vec<u8>)) -> Processor {
         Processor {
             master_buffer: Vec::new(),
@@ -42,7 +104,7 @@ impl Processor {
     /// constructor. This will call the callback function when an entire
     /// message is produced
     ///
-    /// This is BLOCKING, so call this in a separate thread if you want
+    /// This is **BLOCKING**, so call this in a separate thread if you want
     /// your application to do anything
     pub fn listen(&mut self) {
         let mut read_bytes = 0;
@@ -53,6 +115,7 @@ impl Processor {
                 Ok(bytes) => read_bytes = bytes,
                 Err(e) => println!("error from reading: {:?}", e)
             }
+
 			if read_bytes > 0 {
 				self.process_data(buf[0..read_bytes].to_vec());
 				zeroes_seen = 0;
