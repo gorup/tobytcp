@@ -5,17 +5,7 @@ use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 
-/// A `Messenger` will read from a [`TcpStream`] and call your callback with messages
-///
-/// # Examples
-/// ```
-/// use tobytcp::core::Messenger;
-///
-/// fn handle_message(message: Vec<u8>) {
-///     // ...
-/// }
-///
-/// ```
+/// A `Messenger`, needs a [`TcpStream`] to send and receive data from.
 ///
 /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
 pub struct Messenger {
@@ -26,11 +16,7 @@ pub struct Messenger {
 }
 
 impl Messenger {
-    /// Creates a new `Messenger`. Your callback function will
-    /// be executed once a message has been received in
-    /// its entirety.
-    ///
-    /// The callback function will be executed in a child thread of the `Messenger`
+    /// Creates a new `Messenger`.
     pub fn new(tcp_stream: TcpStream) -> Messenger {
         Messenger {
             tcp_stream: tcp_stream,
@@ -40,17 +26,19 @@ impl Messenger {
         }
     }
 
+    /// Starts all of the threads and queues necessary to do work
     pub fn start(&mut self) {
         println!("starting");
 
         println!("starting thread that receives from tcp");
+        // maybe just give ownership of rawdata_c's sender?
         self.consume_tcp_stream();
 
-        // thread somehow, needs almost everything
+        // DEFFFF just give ownership of rawdata_c's receiver, and processed_c's sender?
         println!("starting thread that receives raw data");
         self.consume_rawdata();
 
-        // thread somehow, needs stream and send_c.1
+        // maybe just give ownership of send_c's receiver? needs stream
         println!("starting thread that will consume messages sent by cust");
         self.consume_sends();
 
