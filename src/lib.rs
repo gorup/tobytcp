@@ -13,6 +13,21 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 
 /// TobyMessenger lets you send messages (in the form of `Vec<u8>`) over a [`TcpStream`]
 /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
+///
+/// # Example
+///
+/// ```
+/// // connect to a TobyTcp server
+/// let stream = TcpStream::connect("127.0.0.1:4444").unwrap();
+///
+/// let mut messenger = TobyMessenger::new(stream);
+/// let (sender, receiver) = messenger.start();
+///
+/// sender.send("Hello!".as_bytes().to_vec()).unwrap();
+///
+/// let recv_buf = receiver.recv().unwrap();
+///
+/// ```
 pub struct TobyMessenger {
     tcp_stream: TcpStream,
 }
@@ -27,7 +42,7 @@ impl TobyMessenger {
     ///
     /// The returned [`Sender`] is to be used to send messages over the provided [`TcpStream`].
     ///
-    /// The returned [`Receiver`] is to be used to process messages received over the [`TcpStream`].
+    /// The returned [`Receiver`] is to be used to process messages received over the [`TcpStream`].'
     ///
     /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
     /// [`Sender`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html
@@ -115,7 +130,7 @@ fn send_data(mut stream: TcpStream, receiver: Receiver<Vec<u8>>, timeout: Durati
                 let encoded = encode_tobytcp(buf);
                 match stream.write_all(encoded.as_slice()) {
                     Ok(_) => {} // maybe log at debug
-                    Err(e) => println!("Error sending data over tcp stream {}", e),
+                    Err(e) => println!("Error sending data over tcp stream {}", e), // TODO: Catch errors to know when to shutdown
                 }
             }
             Err(e) => {
