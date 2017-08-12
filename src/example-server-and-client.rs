@@ -1,52 +1,59 @@
 extern crate tobytcp;
 
 use std::net::{TcpListener, TcpStream};
-use tobytcp::core::Messenger;
-use std::io::Write;
+use tobytcp::TobyMessenger;
+use std::thread;
 use std::io;
 
 fn main() {
+    println!("Starting server");
+    let server_h = thread::spawn(|| { start_server(); });
+    println!("Starting client");
+    let client_h = thread::spawn(|| { start_client(); });
+    server_h.join().unwrap();
+    client_h.join().unwrap();
+    println!("Done");
 }
 
 fn start_server() {
     let listener = TcpListener::bind("127.0.0.1:4444").unwrap();
 
-    let mut messengers = Vec::new();
-
     // accept connections and process them serially
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                println!("Server received a connection");
-                let mut messenger = Messenger::new(stream);
-                messenger.start();
-                messengers.push(messenger);
+                println!("SERVER Server received a connection");
+                let mut messenger = TobyMessenger::new(stream);
+                let (_, receiver) = messenger.start();
+                loop {
+                    match receiver.recv() {
+                        Ok(data) => print_message(data),
+                        Err(e) => println!("SERVER Error receiving data {}", e),
+                    }
+                }
             }
-            Err(e) => println!("Error from an incoming connection: {:?}", e)
+            Err(e) => println!("SERVER Error from an incoming connection: {:?}", e),
         }
     }
-
-    println!("starting server");
-
-    println!("starting client");
-    start_client();
 }
 
 fn start_client() {
-	let mut stream = TcpStream::connect("127.0.0.1:4444").unwrap();
+    let stream = TcpStream::connect("127.0.0.1:4444").unwrap();
+    let mut messenger = TobyMessenger::new(stream);
+    let (sender, _) = messenger.start();
 
-	loop {
-		let mut input = String::new();
-		match io::stdin().read_line(&mut input) {
-			Ok(_) => {
-				stream.write(input.trim().as_bytes()).unwrap();
-				//core::send(vec![0u8; 512000000], &stream);
-			}
-			Err(error) => println!("error: {}", error),
-		}
-	}
+    println!("CLIENT connected to stream");
+    loop {
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(_) => {
+                sender.send(input.trim().as_bytes().to_vec()).unwrap();
+            }
+            Err(error) => println!("CLIENT error: {}", error),
+        }
+    }
 }
 
 fn print_message(bytes: Vec<u8>) {
-    println!("Message received 🤙, {} bytes: {}", bytes.len(), String::from_utf8(bytes).unwrap());
+    println!("SERVER Message received 🤙, {}", bytes.len())
 }
