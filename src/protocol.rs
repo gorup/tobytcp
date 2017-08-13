@@ -1,3 +1,5 @@
+//! This module has a helper for encoding data to TobyTcp
+
 use std::convert::TryFrom;
 
 /// Call this with your data, and the returned buffer will be a properly

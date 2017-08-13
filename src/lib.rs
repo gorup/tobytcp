@@ -1,8 +1,6 @@
 #![feature(try_from)]
 
-//! The `tobytcp` library provides the `TobyMessenger` struct.
-//!
-//! by Ryan Gorup
+//! The `tobytcp` library provides the `TobyMessenger` struct used for sending bi-directional messages in a `TcpStream`.
 
 pub mod protocol;
 
@@ -44,7 +42,7 @@ impl TobyMessenger {
     ///
     /// The returned [`Sender`] is to be used to send messages over the provided [`TcpStream`].
     ///
-    /// The returned [`Receiver`] is to be used to process messages received over the [`TcpStream`].'
+    /// The returned [`Receiver`] is to be used to process messages received over the [`TcpStream`].
     ///
     /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
     /// [`Sender`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html
