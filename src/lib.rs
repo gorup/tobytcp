@@ -4,6 +4,8 @@
 //!
 //! by Ryan Gorup
 
+pub mod protocol;
+
 use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::thread;
@@ -127,7 +129,7 @@ fn send_data(mut stream: TcpStream, receiver: Receiver<Vec<u8>>, timeout: Durati
         // check boolean here!
         match receiver.recv_timeout(timeout) {
             Ok(buf) => {
-                let encoded = encode_tobytcp(buf);
+                let encoded = protocol::encode_tobytcp(buf);
                 match stream.write_all(encoded.as_slice()) {
                     Ok(_) => {} // maybe log at debug
                     Err(e) => println!("Error sending data over tcp stream {}", e), // TODO: Catch errors to know when to shutdown
@@ -146,15 +148,6 @@ fn send_data(mut stream: TcpStream, receiver: Receiver<Vec<u8>>, timeout: Durati
     }
 }
 
-fn encode_tobytcp(mut message: Vec<u8>) -> Vec<u8> {
-    let data_len_64 = u64::try_from(message.len()).unwrap();
-    data_len_64.to_le();
-
-    let mut encoded = bytes_from(data_len_64).to_vec();
-    encoded.append(&mut message);
-    encoded
-}
-
 /// Goes from a slice of bytes to a u64.
 fn bytes_to(bytes: &[u8]) -> u64 {
     let mut ret = 0u64;
@@ -165,17 +158,6 @@ fn bytes_to(bytes: &[u8]) -> u64 {
             ret = ret << 8;
         }
         i = i + 1;
-    }
-    ret
-}
-
-/// Goes from a single u64 to 8xu8
-fn bytes_from(mut num: u64) -> [u8; 8] {
-    let mut ret = [0u8; 8];
-
-    for (i, _) in (0..7).enumerate() {
-        ret[7 - i] = u8::try_from(num & 0b1111_1111_u64).unwrap();
-        num = num >> 8;
     }
     ret
 }

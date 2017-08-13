@@ -1,6 +1,9 @@
 [package]
 name = "tobytcp"
-version = "0.1.0"
-authors = ["gorup"]
+version = "0.8.0"
+authors = ["Ryan Gorup"]
+categories = ["tcp"]
+keywords = ["tcp"]
+repository = "https://github.com/gorup/tobytcp"
 
 [dependencies]
