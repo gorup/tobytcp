@@ -164,5 +164,5 @@ fn bytes_to(bytes: &[u8]) -> u64 {
 /// TODO: This won't work for 32 bit machines, or at least it
 /// wont if the value is greater than u32::MAX
 fn to_usize(num: u64) -> usize {
-    usize::try_from(num).unwrap()
+    num as usize
 }

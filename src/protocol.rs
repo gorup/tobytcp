@@ -5,7 +5,7 @@ use std::convert::TryFrom;
 /// Call this with your data, and the returned buffer will be a properly
 /// encoded `TobyTcp` message that can be sent!
 pub fn encode_tobytcp(mut message: Vec<u8>) -> Vec<u8> {
-    let data_len_64 = u64::try_from(message.len()).unwrap();
+    let data_len_64 = message.len() as u64;
     data_len_64.to_le();
 
     let mut encoded = bytes_from(data_len_64).to_vec();

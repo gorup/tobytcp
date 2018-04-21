@@ -4,6 +4,8 @@ This package contains the `tobytcp::TobyMessenger` struct that provides the abil
 
 TobyTcp is a protocol that allows for the use of a raw `tcp` stream for communicating messages, bi-directionally. See below for more details.
 
+**NOTE**: No tests! It works, but not tests...
+
 # [Documentation](https://docs.rs/tobytcp/0.8.0/tobytcp/)
 
 ## TobyMessenger
@@ -28,13 +30,13 @@ sender.send("Hello!".as_bytes().to_vec()).unwrap();
 let recv_buf = receiver.recv().unwrap();
 ```
 
-This library is threadsafe. You can `.clone()` the `Sender` object to have multiple threads all send data through the stream, and the `TobyMessenger` will send them individually. The `Receiver` can only be owned by one thread, and there is no `.clone()` so you can only have one consumer. 
+This library is threadsafe. You can `.clone()` the `Sender` object to have multiple threads all send data through the stream, and the `TobyMessenger` will send them individually. The `Receiver` can only be owned by one thread, and there is no `.clone()` so you can only have one consumer.
 
 **Note:** The underlying queue mechanism is a [MultipleProducersSingleConsumer queue](https://doc.rust-lang.org/std/sync/mpsc/index.html), check out its documentation!
 
 ## TobyTcp Protocol
 
-The TobyTcp protocol uses length prefixing for [message framing](https://blog.stephencleary.com/2009/04/message-framing.html). 
+The TobyTcp protocol uses length prefixing for [message framing](https://blog.stephencleary.com/2009/04/message-framing.html).
 
 ### Specification
 Messages must be prefixed by eight (8) bytes, for a total of 64 bits. This 8 byte/64 bit segment of every message must contain the number of bytes present in the message being sent (NOT including the 8 bytes used for describing the size). The length prefix must be little-endian.
