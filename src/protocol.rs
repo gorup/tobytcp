@@ -1,5 +1,4 @@
 //! This module has a helper for encoding data to TobyTcp
-
 use std::convert::TryFrom;
 
 /// Call this with your data, and the returned buffer will be a properly
@@ -22,4 +21,24 @@ fn bytes_from(mut num: u64) -> [u8; 8] {
         num = num >> 8;
     }
     ret
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn encode_single_byte() {
+        let message = vec![100, 13, 69, 17];
+        let encoded = super::encode_tobytcp(message);
+        // We had 4 bytes of data
+        assert_eq!(vec![0, 0, 0, 0, 0, 0, 0, 4, 100, 13, 69, 17], encoded);
+    }
+
+    // TODO: Figure out how to merge 2 vecs, then merge message to the expected prefix..
+    // #[test]
+    // fn encode_three_byte() {
+    //     let message = vec![69; 257];
+    //     let encoded = super::encode_tobytcp(message);
+    //     // We had 4 bytes of data
+    //     assert_eq!(vec![0, 0, 0, 0, 0, 0, 1, 1, 100, 13, 69, 17], encoded);
+    // }
 }

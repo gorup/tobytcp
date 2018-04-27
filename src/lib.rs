@@ -6,10 +6,10 @@ pub mod protocol;
 
 use std::convert::TryFrom;
 use std::io::{Read, Write};
-use std::thread;
-use std::time::Duration;
 use std::net::TcpStream;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::thread;
+use std::time::Duration;
 
 /// TobyMessenger lets you send messages (in the form of `Vec<u8>`) over a [`TcpStream`]
 /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
@@ -18,7 +18,10 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 ///
 /// ```
 /// // connect to a TobyTcp server
-/// let stream = TcpStream::connect("127.0.0.1:4444").unwrap();
+/// use std::net::TcpStream;
+/// use tobytcp::TobyMessenger;
+///
+/// let stream = TcpStream::connect("127.0.0.1:15235").unwrap();
 ///
 /// let mut messenger = TobyMessenger::new(stream);
 /// let (sender, receiver) = messenger.start();
@@ -35,7 +38,19 @@ pub struct TobyMessenger {
 impl TobyMessenger {
     /// Create a new `TobyMessenger`.
     pub fn new(tcp_stream: TcpStream) -> TobyMessenger {
-        TobyMessenger { tcp_stream: tcp_stream }
+        TobyMessenger {
+            tcp_stream: tcp_stream,
+        }
+    }
+
+    /// Sends the data, encoded as TobyTcp. As opossed to using the sender/receiver, where
+    /// you will not get feedback on if the write failed.
+    ///
+    /// Apologies if this is awkward. You may want to create a new TobyMessenger,
+    /// and just call this method on that, but to do so in a multithreaded way
+    /// would require start() to be threadsafe, which I'm not sure is possible
+    pub fn sync_send(tcp_stream: TcpStream, data: Vec<u8>) -> std::io::Result<()> {
+        send_actual(&tcp_stream, data)
     }
 
     /// Starts all of the threads and queues necessary to do work
@@ -59,9 +74,9 @@ impl TobyMessenger {
         let (outbound_sender, outbound_receiver) = channel();
         match self.tcp_stream.try_clone() {
             Ok(stream) => {
-                thread::spawn(move || 
+                thread::spawn(move || {
                     send_data(stream, outbound_receiver, Duration::from_millis(100))
-                );
+                });
             }
             Err(e) => println!("Error cloning stream for sender {}", e),
         }
@@ -122,14 +137,13 @@ fn compute_curr_size(curr_size: Option<u64>, buf: &mut Vec<u8>) -> Option<u64> {
     }
 }
 
-fn send_data(mut stream: TcpStream, receiver: Receiver<Vec<u8>>, timeout: Duration) {
+fn send_data(stream: TcpStream, receiver: Receiver<Vec<u8>>, timeout: Duration) {
     loop {
         // check boolean here!
         match receiver.recv_timeout(timeout) {
             Ok(buf) => {
-                let encoded = protocol::encode_tobytcp(buf);
-                match stream.write_all(encoded.as_slice()) {
-                    Ok(_) => {} // maybe log at debug
+                match send_actual(&stream, buf) {
+                    Ok(_) => {}                                                     // maybe log at debug
                     Err(e) => println!("Error sending data over tcp stream {}", e), // TODO: Catch errors to know when to shutdown
                 }
             }
@@ -144,6 +158,10 @@ fn send_data(mut stream: TcpStream, receiver: Receiver<Vec<u8>>, timeout: Durati
             }
         }
     }
+}
+
+fn send_actual(mut stream: &TcpStream, buf: Vec<u8>) -> std::io::Result<()> {
+    stream.write_all(protocol::encode_tobytcp(buf).as_slice())
 }
 
 /// Goes from a slice of bytes to a u64.
