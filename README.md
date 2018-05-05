@@ -6,7 +6,7 @@ TobyTcp is a protocol that allows for the use of a raw `tcp` stream for communic
 
 **NOTE**: No tests! It works, but not tests...
 
-# [Documentation](https://docs.rs/tobytcp/0.8.0/tobytcp/)
+# [Documentation](https://docs.rs/tobytcp)
 
 ## TobyMessenger
 To use a TobyMessenger to send messages over a `TcpStream`, you first create a new TobyMessenger, then `start()` it to get a [Sender](https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html) and [Receiver](https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html) that will take care of encoding the data, and sending it over the `TcpStream` asynchronously!
