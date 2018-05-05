@@ -22,23 +22,26 @@ use uuid::Uuid;
 
 struct TobySender {
     tcp_stream: TcpStream,
-    sender_stopped: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
     from_client_receiver: Receiver<Vec<u8>>,
     timeout: Duration,
     id: String,
 }
 
+// GET RID OF ME!!
 impl TobySender {
     fn send_data(&mut self) {
         loop {
             trace!("{}: looping toby sender", self.id);
-            if self.sender_stopped.load(Ordering::Relaxed) {
+            if self.stop.load(Ordering::Relaxed) {
                 info!(
                     "{}: Was told to stop, shutting down outbound message consumer thread",
                     self.id
                 );
                 return;
             }
+
+            // if the TCP connection is closed, we never know about it until we send
             match self.from_client_receiver.recv_timeout(self.timeout) {
                 Ok(buf) => {
                     match send_actual(&self.tcp_stream, buf) {
@@ -49,15 +52,13 @@ impl TobySender {
                         ), // TODO: Catch errors to know when to shutdown
                     }
                 }
-                Err(e) => {
-                    match e {
-                        RecvTimeoutError::Timeout => continue, // check shutdown boolean here
-                        _ => {
-                            info!("{}: Error waiting for messages to send from client, shutting down outbound message consumer thread", self.id);
-                            return;
-                        }
+                Err(e) => match e {
+                    RecvTimeoutError::Timeout => continue,
+                    _ => {
+                        info!("{}: Error waiting for messages to send from client, shutting down outbound message consumer thread", self.id);
+                        return;
                     }
-                }
+                },
             }
         }
     }
@@ -65,7 +66,7 @@ impl TobySender {
 
 struct TobyReceiver {
     tcp_stream: TcpStream,
-    receiver_stopped: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
     to_client_sender: Sender<Vec<u8>>,
     id: String,
 }
@@ -78,7 +79,7 @@ impl TobyReceiver {
         let mut done = false;
         loop {
             trace!("{}: looping toby receiver", self.id);
-            if self.receiver_stopped.load(Ordering::Relaxed) {
+            if self.stop.load(Ordering::Relaxed) {
                 info!(
                     "{}: Was told to stop, shutting down inbound message consumer thread",
                     self.id
@@ -87,7 +88,7 @@ impl TobyReceiver {
             }
 
             let mut tcpbuf = [0u8; 256];
-            // TODO: timeout
+            // TODO: timeout?
             match self.tcp_stream.read(&mut tcpbuf) {
                 Ok(bytes) => {
                     if bytes > 0 {
@@ -96,10 +97,13 @@ impl TobyReceiver {
                     // TODO XXX Not sure if reading zero bytes is definitively the way forward!
                     } else {
                         if done {
-                            info!("{}: read zero bytes from tcp stream indicating client hangup, shutting down inbound message consumer thread", self.id);
+                            info!("{}: read zero bytes from tcp stream indicating client hangup, shutting down everything", self.id);
+                            self.stop.store(true, Ordering::Relaxed);
                             match self.tcp_stream.shutdown(Shutdown::Both) {
-                                Ok(()) => {},
-                                Err(_) => trace!("Got an error while shutting down tcp stream, doing nothing")
+                                Ok(()) => {}
+                                Err(_) => trace!(
+                                    "Got an error while shutting down tcp stream, doing nothing"
+                                ),
                             }
                             return;
                         }
@@ -157,8 +161,7 @@ impl TobyReceiver {
 /// ```
 pub struct TobyMessenger {
     tcp_stream: TcpStream,
-    receiver_stopped: Arc<AtomicBool>,
-    sender_stopped: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
     receiver_thread: Option<JoinHandle<()>>,
     sender_thread: Option<JoinHandle<()>>,
     id: String,
@@ -169,9 +172,8 @@ impl TobyMessenger {
     pub fn new(tcp_stream: TcpStream) -> TobyMessenger {
         TobyMessenger {
             tcp_stream: tcp_stream,
-            receiver_stopped: Arc::new(AtomicBool::new(true)),
             receiver_thread: None,
-            sender_stopped: Arc::new(AtomicBool::new(true)),
+            stop: Arc::new(AtomicBool::new(false)),
             sender_thread: None,
             id: Uuid::new_v4().hyphenated().to_string(),
         }
@@ -208,7 +210,7 @@ impl TobyMessenger {
     /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
     pub fn start(&mut self) -> Result<(Sender<Vec<u8>>, Receiver<Vec<u8>>), ()> {
         let (inbound_sender, inbound_receiver) = channel();
-        let rec_stop_c = self.receiver_stopped.clone();
+        let stop_c = self.stop.clone();
         let mut success = true;
 
         let id_c = self.id.clone();
@@ -218,10 +220,9 @@ impl TobyMessenger {
                     thread::Builder::new()
                         .name(format!("toby_rec_{}", self.id).to_string())
                         .spawn(move || {
-                            rec_stop_c.store(false, Ordering::Relaxed);
                             let mut rec = TobyReceiver {
                                 tcp_stream: stream,
-                                receiver_stopped: rec_stop_c,
+                                stop: stop_c,
                                 to_client_sender: inbound_sender,
                                 id: id_c,
                             };
@@ -237,7 +238,7 @@ impl TobyMessenger {
         }
 
         let (outbound_sender, outbound_receiver) = channel();
-        let snd_stop_c = self.sender_stopped.clone();
+        let stop_c = self.stop.clone();
         let id_c = self.id.clone();
 
         match self.tcp_stream.try_clone() {
@@ -246,10 +247,9 @@ impl TobyMessenger {
                     thread::Builder::new()
                         .name(format!("toby_snd_{}", self.id).to_string())
                         .spawn(move || {
-                            snd_stop_c.store(false, Ordering::Relaxed);
                             let mut snd = TobySender {
                                 tcp_stream: stream,
-                                sender_stopped: snd_stop_c,
+                                stop: stop_c,
                                 from_client_receiver: outbound_receiver,
                                 timeout: Duration::from_millis(100),
                                 id: id_c,
@@ -274,8 +274,13 @@ impl TobyMessenger {
 
     /// Sends a signal to stop all of the threads.
     pub fn stop_nonblock(&mut self) {
-        self.sender_stopped.store(true, Ordering::Relaxed);
-        self.receiver_stopped.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::Relaxed);
+        match self.tcp_stream.shutdown(Shutdown::Both) {
+            Ok(()) => {}
+            Err(_) => trace!(
+                "Got an error while shutting down tcp stream, doing nothing"
+            ),
+        }
     }
 }
 
