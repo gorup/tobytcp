@@ -1,12 +1,13 @@
 [package]
 name = "tobytcp"
-version = "0.9.0"
+version = "0.9.1"
 authors = ["Ryan Gorup"]
 categories = ["tcp"]
 keywords = ["tcp"]
 repository = "https://github.com/gorup/tobytcp"
 description = "A little library for sending messages over a raw tcp stream"
 license-file = "LICENSE"
+readme="README.md"
 
 [dependencies]
 log = "0.4.0"
