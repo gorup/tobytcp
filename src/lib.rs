@@ -10,7 +10,7 @@ pub mod protocol;
 
 use std::convert::TryFrom;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ struct TobySender {
 impl TobySender {
     fn send_data(&mut self) {
         loop {
-            debug!("{}: looping toby sender", self.id);
+            trace!("{}: looping toby sender", self.id);
             if self.sender_stopped.load(Ordering::Relaxed) {
                 info!(
                     "{}: Was told to stop, shutting down outbound message consumer thread",
@@ -75,9 +75,9 @@ impl TobyReceiver {
     fn receive_data(&mut self) {
         let mut raw_buff = Vec::new();
         let mut curr_size: Option<u64> = None;
-
+        let mut done = false;
         loop {
-            debug!("{}: looping toby receiver", self.id);
+            trace!("{}: looping toby receiver", self.id);
             if self.receiver_stopped.load(Ordering::Relaxed) {
                 info!(
                     "{}: Was told to stop, shutting down inbound message consumer thread",
@@ -91,8 +91,20 @@ impl TobyReceiver {
             match self.tcp_stream.read(&mut tcpbuf) {
                 Ok(bytes) => {
                     if bytes > 0 {
+                        done = false;
                         raw_buff.append(&mut tcpbuf[0..bytes].to_vec());
+                    // TODO XXX Not sure if reading zero bytes is definitively the way forward!
                     } else {
+                        if done {
+                            info!("{}: read zero bytes from tcp stream indicating client hangup, shutting down inbound message consumer thread", self.id);
+                            match self.tcp_stream.shutdown(Shutdown::Both) {
+                                Ok(()) => {},
+                                Err(_) => trace!("Got an error while shutting down tcp stream, doing nothing")
+                            }
+                            return;
+                        }
+                        done = true;
+                        trace!("{}: Read zero bytes, if this happens again, we will shutdown the thread.", self.id);
                         continue;
                     }
                 }
