@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -114,6 +114,8 @@ impl TobyReceiver {
 /// let recv_buf = receiver.recv().unwrap();
 ///
 /// ```
+///
+/// `TODO:` Make it clone/copyable, but for now use an `Arc<Mutex<>>` to make this threadsafe.
 pub struct TobyMessenger {
     tcp_stream: TcpStream,
     stop: Arc<AtomicBool>,
@@ -203,9 +205,7 @@ impl TobyMessenger {
         self.stop.store(true, Ordering::Relaxed);
         match self.tcp_stream.shutdown(Shutdown::Both) {
             Ok(()) => {}
-            Err(_) => trace!(
-                "Got an error while shutting down tcp stream, doing nothing"
-            ),
+            Err(_) => trace!("Got an error while shutting down tcp stream, doing nothing"),
         }
     }
 }
