@@ -12,57 +12,12 @@ use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Mutex, Arc};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 use uuid::Uuid;
-
-struct TobySender {
-    tcp_stream: TcpStream,
-    stop: Arc<AtomicBool>,
-    from_client_receiver: Receiver<Vec<u8>>,
-    timeout: Duration,
-    id: String,
-}
-
-// GET RID OF ME!!
-impl TobySender {
-    fn send_data(&mut self) {
-        loop {
-            trace!("{}: looping toby sender", self.id);
-            if self.stop.load(Ordering::Relaxed) {
-                info!(
-                    "{}: Was told to stop, shutting down outbound message consumer thread",
-                    self.id
-                );
-                return;
-            }
-
-            // if the TCP connection is closed, we never know about it until we send
-            match self.from_client_receiver.recv_timeout(self.timeout) {
-                Ok(buf) => {
-                    match send_actual(&self.tcp_stream, buf) {
-                        Ok(_) => {} // maybe log at debug
-                        Err(e) => error!(
-                            "{}: Error sending data over tcp stream, dropped your message {}",
-                            self.id, e
-                        ), // TODO: Catch errors to know when to shutdown
-                    }
-                }
-                Err(e) => match e {
-                    RecvTimeoutError::Timeout => continue,
-                    _ => {
-                        info!("{}: Error waiting for messages to send from client, shutting down outbound message consumer thread", self.id);
-                        return;
-                    }
-                },
-            }
-        }
-    }
-}
 
 struct TobyReceiver {
     tcp_stream: TcpStream,
@@ -163,7 +118,7 @@ pub struct TobyMessenger {
     tcp_stream: TcpStream,
     stop: Arc<AtomicBool>,
     receiver_thread: Option<JoinHandle<()>>,
-    sender_thread: Option<JoinHandle<()>>,
+    writer: Mutex<()>, // guards that one person is writing to the TcpStream
     id: String,
 }
 
@@ -174,7 +129,7 @@ impl TobyMessenger {
             tcp_stream: tcp_stream,
             receiver_thread: None,
             stop: Arc::new(AtomicBool::new(false)),
-            sender_thread: None,
+            writer: Mutex::new(()),
             id: Uuid::new_v4().hyphenated().to_string(),
         }
     }
@@ -184,31 +139,30 @@ impl TobyMessenger {
         self.id.clone()
     }
 
-    /// Sends the data, encoded as TobyTcp. As opossed to using the sender/receiver, where
-    /// you will not get feedback on if the write failed.
-    ///
-    /// Apologies if this is awkward. You may want to create a new TobyMessenger,
-    /// and just call this method on that, but to do so in a multithreaded way
-    /// would require start() to be threadsafe, which I'm not sure is possible
-    pub fn sync_send(tcp_stream: TcpStream, data: Vec<u8>) -> std::io::Result<()> {
-        send_actual(&tcp_stream, data)
-    }
-
     /// Use your `TobyMessenger` to send data synchronously and know the result!
     pub fn send(&self, data: Vec<u8>) -> std::io::Result<()> {
-        send_actual(&self.tcp_stream, data)
+        match self.writer.lock() {
+            Ok(_) => send_actual(&self.tcp_stream, data),
+            Err(e) => {
+                error!("Error locking the writer! {}", e);
+                panic!()
+            }
+        }
     }
 
     /// Starts all of the threads and queues necessary to do work
-    ///
-    /// The returned [`Sender`] is to be used to send messages over the provided [`TcpStream`].
     ///
     /// The returned [`Receiver`] is to be used to process messages received over the [`TcpStream`].
     ///
     /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
     /// [`Sender`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html
     /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
-    pub fn start(&mut self) -> Result<(Sender<Vec<u8>>, Receiver<Vec<u8>>), ()> {
+    pub fn start(&mut self) -> Result<(Receiver<Vec<u8>>), ()> {
+        if self.receiver_thread.is_some() {
+            error!("Calling start on a TobyMessenger that has already started a thread!");
+            return Err(());
+        }
+
         let (inbound_sender, inbound_receiver) = channel();
         let stop_c = self.stop.clone();
         let mut success = true;
@@ -237,42 +191,14 @@ impl TobyMessenger {
             }
         }
 
-        let (outbound_sender, outbound_receiver) = channel();
-        let stop_c = self.stop.clone();
-        let id_c = self.id.clone();
-
-        match self.tcp_stream.try_clone() {
-            Ok(stream) => {
-                self.sender_thread = Some(
-                    thread::Builder::new()
-                        .name(format!("toby_snd_{}", self.id).to_string())
-                        .spawn(move || {
-                            let mut snd = TobySender {
-                                tcp_stream: stream,
-                                stop: stop_c,
-                                from_client_receiver: outbound_receiver,
-                                timeout: Duration::from_millis(100),
-                                id: id_c,
-                            };
-                            snd.send_data();
-                        })
-                        .unwrap(),
-                );
-            }
-            Err(e) => {
-                error!("{}: Error cloning stream for sender {}", self.id, e);
-                success = false;
-            }
-        }
-
         if success {
-            Ok((outbound_sender, inbound_receiver))
+            Ok(inbound_receiver)
         } else {
             Err(())
         }
     }
 
-    /// Sends a signal to stop all of the threads.
+    /// Sends a signal to stop all of the threads, will not block on them actually shutting down.
     pub fn stop_nonblock(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         match self.tcp_stream.shutdown(Shutdown::Both) {
