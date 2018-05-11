@@ -24,9 +24,10 @@ thread::spawn(|| {
 
     // Echo the data right back!!
     for stream in listener.incoming() {
-        let mut messenger = super::TobyMessenger::new(stream.unwrap());
+        let mut messenger = TobyMessenger::new(stream.unwrap());
         let receiver = messenger.start().unwrap();
         loop {
+            receiver.recv().unwrap();
             messenger.send("Hello back!!".as_bytes().to_vec()).unwrap();
         }
     }
@@ -34,7 +35,7 @@ thread::spawn(|| {
 
 let stream = TcpStream::connect("127.0.0.1:8031").unwrap();
 
-let mut messenger = super::TobyMessenger::new(stream);
+let mut messenger = TobyMessenger::new(stream);
 let receiver = messenger.start().unwrap();
 
 messenger.send("Hello!".as_bytes().to_vec()).unwrap();
