@@ -1,15 +1,15 @@
 # `tobytcp`
 
-This package contains the `tobytcp::TobyMessenger` struct that provides the ability to asynchronously talk **TobyTcp** over a `TcpStream`.
+This package contains the `tobytcp::TobyMessenger` struct that provides the ability to talk **TobyTcp** over a `TcpStream`.
 
 TobyTcp is a protocol that allows for the use of a raw `tcp` stream for communicating messages, bi-directionally. See below for more details.
 
-**NOTE**: No tests! It works, but not tests...
+**NOTE**: Not ready for Production use. See below [Disclaimer](#disclaimer) section.
 
 # [Documentation](https://docs.rs/tobytcp)
 
 ## TobyMessenger
-To use a TobyMessenger to send messages over a `TcpStream`, you first create a new TobyMessenger, then `start()` it to get a [Sender](https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html) and [Receiver](https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html) that will take care of encoding the data, and sending it over the `TcpStream` asynchronously!
+To use a TobyMessenger to send messages over a `TcpStream`, you first create a new TobyMessenger, then `start()` it! You will get back a [Receiver](https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html) to poll messages from. To send data, Use your TobyMessenger and call `.send()`.
 
 ```rust
 extern crate tobytcp;
@@ -19,18 +19,32 @@ use tobytcp::TobyMessenger;
 
 ...
 
-let stream = TcpStream::connect("127.0.0.1:34254").unwrap();
-let toby_messenger = TobyMessenger::new(stream);
-let (sender, receiver) = toby_messenger.start();
+thread::spawn(|| {
+    let listener = TcpListener::bind("127.0.0.1:8031").unwrap();
 
-// Send a 'Hello!'
-sender.send("Hello!".as_bytes().to_vec()).unwrap();
+    // Echo the data right back!!
+    for stream in listener.incoming() {
+        let mut messenger = super::TobyMessenger::new(stream.unwrap());
+        let receiver = messenger.start().unwrap();
+        loop {
+            messenger.send("Hello back!!".as_bytes().to_vec()).unwrap();
+        }
+    }
+});
 
-// Receive a message!
-let recv_buf = receiver.recv().unwrap();
+let stream = TcpStream::connect("127.0.0.1:8031").unwrap();
+
+let mut messenger = super::TobyMessenger::new(stream);
+let receiver = messenger.start().unwrap();
+
+messenger.send("Hello!".as_bytes().to_vec()).unwrap();
+
+assert_eq!("Hello back!!".as_bytes().to_vec(), receiver.recv().unwrap());
 ```
 
-This library is threadsafe. You can `.clone()` the `Sender` object to have multiple threads all send data through the stream, and the `TobyMessenger` will send them individually. The `Receiver` can only be owned by one thread, and there is no `.clone()` so you can only have one consumer.
+Version `0.10.0` made it so you have one `Receiver` returned from calling `toby_messenger.start()`, which you use to poll for messages. For sending messages, you must your `TobyMessenger`, and call `.send(..)` with your data. 
+
+For now, I would NOT assume it would be possible to send multiple messages, in paralell, over the same TCPStream. If you have to have multiple threads send data, I would arc/mutex it like such: `Arc::new(Mutex::new(toby_messenger))`, and give each thread a copy.
 
 **Note:** The underlying queue mechanism is a [MultipleProducersSingleConsumer queue](https://doc.rust-lang.org/std/sync/mpsc/index.html), check out its documentation!
 
@@ -53,16 +67,13 @@ Here is an example of an ecnoded messages. The message has `18` bytes of data, a
 ```
 
 ## Disclaimer
-This little library has not been heavily tested, and I would avoid using it in a 'production' environment. This has just been a `rust` and `tcp` learning experience for me, and it is used in a tiny project I'm working on.
-
-Also I don't think it works on `32` bit machines..
+This little library has tests around the protocol and the `TobyMessenger`, but I would not use it in production service(s) just yet. The [bugs/todos section](#known-bugs-/-todos) details the specifics.
 
 ## Known Bugs / Todos
 In no particular order:
-- 32 bit machines might work, but probably not if the data is over `u32::max`
-- It prints to `stderr` when something breaks, which is kind of ugly
-- It doesn't hang up TcpStreams properly, it just kind of stops working if the stream is broken
-- Uses experimental `try_from`
+- 32 bit machines may or may not work, never tested.
+- Uses `as` to cast to/from `usize`, which I believe is safe, but might not build on all platforms?
+- Make it threadsafe, i.e. implement `send` and `sync`. Ideally, you could just pass around a `TobyMessenger` object anywhere and send messages as you please and trust it, but now you need to `Arc<Mutex<..>>` it.
 
 ## License
 The University of Illinois/NCSA (National Center for Supercomputing Applications) Open Source License

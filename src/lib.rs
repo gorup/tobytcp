@@ -1,14 +1,10 @@
-#![feature(try_from)]
-
 //! The `tobytcp` library provides the `TobyMessenger` struct used for sending bi-directional messages in a `TcpStream`.
-
 #[macro_use]
 extern crate log;
 extern crate uuid;
 
 pub mod protocol;
 
-use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,7 +39,7 @@ impl TobyReceiver {
             }
 
             let mut tcpbuf = [0u8; 256];
-            // TODO: timeout?
+
             match self.tcp_stream.read(&mut tcpbuf) {
                 Ok(bytes) => {
                     if bytes > 0 {
@@ -94,28 +90,27 @@ impl TobyReceiver {
     }
 }
 
-/// TobyMessenger lets you send messages (in the form of `Vec<u8>`) over a [`TcpStream`]
-/// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
+/// TobyMessenger lets you send messages (in the form of `Vec<u8>`) over a [`TcpStream`](https://doc.rust-lang.org/std/net/struct.TcpStream.html)
 ///
 /// # Example
 ///
-/// ```
-/// // connect to a TobyTcp server
-/// use std::net::TcpStream;
+/// ```no_run
+/// # use std::net::TcpStream;
 /// use tobytcp::TobyMessenger;
-///
-/// let stream = TcpStream::connect("127.0.0.1:15235").unwrap();
+/// # let stream = TcpStream::connect("127.0.0.1:15235").unwrap();
 ///
 /// let mut messenger = TobyMessenger::new(stream);
-/// let (sender, receiver) = messenger.start();
+/// let receiver = messenger.start().unwrap();
 ///
-/// sender.send("Hello!".as_bytes().to_vec()).unwrap();
-///
-/// let recv_buf = receiver.recv().unwrap();
+/// loop {
+///     let msg = receiver.recv().unwrap();
+///     // echo msg back!
+///     messenger.send(msg);
+/// }
 ///
 /// ```
 ///
-/// `TODO:` Make it clone/copyable, but for now use an `Arc<Mutex<>>` to make this threadsafe.
+// `TODO:` Make it clone/copyable, but for now use an `Arc<Mutex<>>` to make this threadsafe.
 pub struct TobyMessenger {
     tcp_stream: TcpStream,
     stop: Arc<AtomicBool>,
@@ -232,7 +227,7 @@ fn bytes_to(bytes: &[u8]) -> u64 {
     let mut ret = 0u64;
     let mut i = 0; // hacky
     for byte in bytes {
-        ret = ret | u64::try_from(*byte).unwrap();
+        ret = ret | *byte as u64;
         if i < 7 {
             ret = ret << 8;
         }
@@ -246,4 +241,56 @@ fn bytes_to(bytes: &[u8]) -> u64 {
 /// wont if the value is greater than u32::MAX
 fn to_usize(num: u64) -> usize {
     num as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+
+    #[test]
+    fn test_send_data() {
+        thread::spawn(|| {
+            let listener = TcpListener::bind("127.0.0.1:8032").unwrap();
+
+            // Echo the data right back!!
+            for stream in listener.incoming() {
+                let mut messenger = super::TobyMessenger::new(stream.unwrap());
+                messenger.start().unwrap();
+                messenger.send(vec![123, 4, 8]).unwrap();
+            }
+        });
+
+        let stream = TcpStream::connect("127.0.0.1:8032").unwrap();
+
+        let mut messenger = super::TobyMessenger::new(stream);
+        let receiver = messenger.start().unwrap();
+
+        assert_eq!(vec![123, 4, 8], receiver.recv().unwrap());
+    }
+
+    #[test]
+    fn test_echo_single() {
+        thread::spawn(|| {
+            let listener = TcpListener::bind("127.0.0.1:8031").unwrap();
+
+            // Echo the data right back!!
+            for stream in listener.incoming() {
+                let mut messenger = super::TobyMessenger::new(stream.unwrap());
+                let receiver = messenger.start().unwrap();
+                messenger.send(receiver.recv().unwrap()).unwrap();
+            }
+        });
+
+        let stream = TcpStream::connect("127.0.0.1:8031").unwrap();
+
+        let mut messenger = super::TobyMessenger::new(stream);
+        let receiver = messenger.start().unwrap();
+
+        let data = vec![31, 53, 74, 3, 67, 8, 4];
+        messenger.send(data.clone()).unwrap();
+
+        // The message should be echo'd back
+        assert_eq!(data, receiver.recv().unwrap());
+    }
 }
