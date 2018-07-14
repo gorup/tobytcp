@@ -31,7 +31,7 @@ impl TobyReceiver {
         loop {
             trace!("{}: looping toby receiver", self.id);
             if self.stop.load(Ordering::Relaxed) {
-                info!(
+                debug!(
                     "{}: Was told to stop, shutting down inbound message consumer thread",
                     self.id
                 );
@@ -48,7 +48,7 @@ impl TobyReceiver {
                     // TODO XXX Not sure if reading zero bytes is definitively the way forward!
                     } else {
                         if done {
-                            info!("{}: read zero bytes from tcp stream indicating client hangup, shutting down everything", self.id);
+                            debug!("{}: read zero bytes from tcp stream indicating client hangup, shutting down everything", self.id);
                             self.stop.store(true, Ordering::Relaxed);
                             match self.tcp_stream.shutdown(Shutdown::Both) {
                                 Ok(()) => {}
@@ -64,7 +64,7 @@ impl TobyReceiver {
                     }
                 }
                 Err(e) => {
-                    error!("{}: Error waiting for data off of tcp stream, shutting down inbound message consumer thread {}", self.id, e);
+                    debug!("{}: Error waiting for data off of tcp stream, shutting down inbound message consumer thread {}", self.id, e);
                     return;
                 }
             }
@@ -81,7 +81,7 @@ impl TobyReceiver {
                 match self.to_client_sender.send(parsed_message) {
                     Ok(_) => {} // maybe log at debug
                     Err(e) => {
-                        info!("{}: Error sending a complete message to the client, shutting down inbound message consumer thread {}", self.id, e);
+                        debug!("{}: Error sending a complete message to the client, shutting down inbound message consumer thread {}", self.id, e);
                         return;
                     }
                 }
@@ -141,7 +141,7 @@ impl TobyMessenger {
         match self.writer.lock() {
             Ok(_) => send_actual(&self.tcp_stream, data),
             Err(e) => {
-                error!("Error locking the writer! {}", e);
+                debug!("Error locking the writer! {}", e);
                 panic!()
             }
         }
@@ -156,7 +156,7 @@ impl TobyMessenger {
     /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
     pub fn start(&mut self) -> Result<(Receiver<Vec<u8>>), ()> {
         if self.receiver_thread.is_some() {
-            error!("Calling start on a TobyMessenger that has already started a thread!");
+            debug!("Calling start on a TobyMessenger that has already started a thread!");
             return Err(());
         }
 
@@ -183,7 +183,7 @@ impl TobyMessenger {
                 );
             }
             Err(e) => {
-                error!("{}: Error cloning stream for consumer {}", self.id, e);
+                debug!("{}: Error cloning stream for consumer {}", self.id, e);
                 success = false;
             }
         }
