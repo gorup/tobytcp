@@ -293,4 +293,39 @@ mod tests {
         // The message should be echo'd back
         assert_eq!(data, receiver.recv().unwrap());
     }
+
+    #[test]
+    fn test_echo_loop() {
+        thread::spawn(|| {
+            let listener = TcpListener::bind("127.0.0.1:8037").unwrap();
+
+            // Echo the data right back!!
+            for stream in listener.incoming() {
+                let mut messenger = super::TobyMessenger::new(stream.unwrap());
+                let receiver = messenger.start().unwrap();
+                loop {
+                    let mut to_append : Vec<u8> = vec![8];
+                    let mut reply = receiver.recv().unwrap();
+                    reply.append(&mut to_append);
+                    messenger.send(reply).unwrap();
+                }
+            }
+        });
+
+        let stream = TcpStream::connect("127.0.0.1:8037").unwrap();
+
+        let mut messenger = super::TobyMessenger::new(stream);
+        let receiver = messenger.start().unwrap();
+
+        let mut ran = 0;
+        for i in 0..100 {
+            let mut data = vec![i];
+            messenger.send(data.clone()).unwrap();
+            let mut to_append : Vec<u8> = vec![8];
+            data.append(&mut to_append);
+            assert_eq!(data, receiver.recv().unwrap());
+            ran+=1;
+        }
+        assert_eq!(100, ran);
+    }
 }
