@@ -45,7 +45,7 @@ assert_eq!("Hello back!!".as_bytes().to_vec(), receiver.recv().unwrap());
 
 Version `0.10.0` made it so you have one `Receiver` returned from calling `toby_messenger.start()`, which you use to poll for messages. For sending messages, you must your `TobyMessenger`, and call `.send(..)` with your data. 
 
-For now, I would NOT assume it would be possible to send multiple messages, in paralell, over the same TCPStream. If you have to have multiple threads send data, I would arc/mutex it like such: `Arc::new(Mutex::new(toby_messenger))`, and give each thread a copy.
+If you have to have multiple threads send data, I would arc/mutex it like such: `Arc::new(Mutex::new(toby_messenger))`, and give each thread a copy.
 
 **Note:** The underlying queue mechanism is a [MultipleProducersSingleConsumer queue](https://doc.rust-lang.org/std/sync/mpsc/index.html), check out its documentation!
 
@@ -69,6 +69,8 @@ Here is an example of an ecnoded messages. The message has `18` bytes of data, a
 
 ## Disclaimer
 This little library has tests around the protocol and the `TobyMessenger`, but I would not use it in production service(s) just yet. The [bugs/todos section](#known-bugs-/-todos) details the specifics.
+
+That being said, there are plenty of tests and I am not aware of any edge cases or scenarios that it breaks during, and I'm using it in my own small project and it works without issues there!
 
 ## Known Bugs / Todos
 In no particular order:
