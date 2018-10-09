@@ -1,223 +1,44 @@
-//! The `tobytcp` library provides the `TobyMessenger` struct used for sending bi-directional messages in a `TcpStream`.
-#[macro_use]
-extern crate log;
-extern crate uuid;
-
 pub mod protocol;
 
-use std::error::Error;
-use std::fmt;
-use std::io;
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
-use std::thread;
-use std::thread::JoinHandle;
+use std::collections::VecDeque;
 
-use uuid::Uuid;
-
-struct TobyReceiver {
-    tcp_stream: TcpStream,
-    stop: Arc<AtomicBool>,
-    to_client_sender: Sender<Vec<u8>>,
-    id: String,
+pub struct TobyReceiver {
+    raw_buff: Vec<u8>,
+    curr_size: Option<u64>,
+    ready: VecDeque<Vec<u8>>,
 }
 
 impl TobyReceiver {
+    fn new() -> Self {
+        TobyReceiver {
+            curr_size: None,
+            raw_buff: Vec::new(),
+            ready: VecDeque::new(),
+        }
+    }
+
     // consumes tcp stream, sends finished messages to Sender's corresponding receiver
-    fn receive_data(&mut self) {
-        let mut raw_buff = Vec::new();
-        let mut curr_size: Option<u64> = None;
-        let mut done = false;
-        loop {
-            trace!("{}: looping toby receiver", self.id);
-            if self.stop.load(Ordering::Relaxed) {
-                debug!(
-                    "{}: Was told to stop, shutting down inbound message consumer thread",
-                    self.id
-                );
-                return;
-            }
+    fn bark(&mut self, mut data: Vec<u8>) {
+        self.raw_buff.append(&mut data);
 
-            let mut tcpbuf = [0u8; 512];
+        self.curr_size = compute_curr_size(self.curr_size, &mut self.raw_buff);
+        while self.curr_size.is_some() && self.raw_buff.len() >= self.curr_size.unwrap() as usize {
+            // get the data out!
+            let parsed_message = self.raw_buff.drain(0..self.curr_size.unwrap() as usize).collect();
 
-            // TODO: Timeout!
-            match self.tcp_stream.read(&mut tcpbuf) {
-                Ok(bytes) => {
-                    if bytes > 0 {
-                        done = false;
-                        raw_buff.append(&mut tcpbuf[0..bytes].to_vec());
-                    // TODO XXX Not sure if reading zero bytes is definitively the way forward!
-                    } else {
-                        if done {
-                            debug!("{}: read zero bytes from tcp stream indicating client hangup, shutting down everything", self.id);
-                            self.stop.store(true, Ordering::Relaxed);
-                            match self.tcp_stream.shutdown(Shutdown::Both) {
-                                Ok(()) => {}
-                                Err(_) => trace!(
-                                    "Got an error while shutting down tcp stream, doing nothing"
-                                ),
-                            }
-                            return;
-                        }
-                        done = true;
-                        trace!("{}: Read zero bytes, if this happens again, we will shutdown the thread.", self.id);
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    debug!("{}: Error waiting for data off of tcp stream, shutting down inbound message consumer thread {}", self.id, e);
-                    return;
-                }
-            }
+            // reset the size, ugly!
+            self.curr_size = compute_curr_size(None, &mut self.raw_buff);
 
-            curr_size = compute_curr_size(curr_size, &mut raw_buff);
-            while curr_size.is_some() && raw_buff.len() >= to_usize(curr_size.unwrap()) {
-                // get the data out!
-                let parsed_message = raw_buff.drain(0..to_usize(curr_size.unwrap())).collect();
-
-                // TODO: Shrink to a reasonable size if we can
-
-                // reset the size, ugly!
-                curr_size = compute_curr_size(None, &mut raw_buff);
-
-                match self.to_client_sender.send(parsed_message) {
-                    Ok(_) => {} // maybe log at debug
-                    Err(e) => {
-                        debug!("{}: Error sending a complete message to the client, shutting down inbound message consumer thread {}", self.id, e);
-                        return;
-                    }
-                }
-            }
+            self.ready.push_back(parsed_message);
         }
     }
 }
 
-#[derive(Debug)]
-pub enum TobyMessengerError {
-    /// You called start when you already started it! Don't do that!
-    AlreadyStartedError,
-    /// We internally clone your stream, and we had an error doing so.
-    StreamCloningError(io::Error),
-    /// Failed to spawn a new thread.
-    ThreadSpawnError(io::Error),
-}
+impl Iterator for TobyReceiver {
+    type Item = Vec<u8>;
 
-impl fmt::Display for TobyMessengerError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-/// We don't have a cause
-impl Error for TobyMessengerError {
-    fn cause(&self) -> Option<&Error> {
-        None
-    }
-}
-
-/// TobyMessenger lets you send messages (in the form of `Vec<u8>`) over a [`TcpStream`](https://doc.rust-lang.org/std/net/struct.TcpStream.html)
-///
-/// # Example
-///
-/// ```no_run
-/// # use std::net::TcpStream;
-/// use tobytcp::TobyMessenger;
-/// # let stream = TcpStream::connect("127.0.0.1:15235").unwrap();
-///
-/// let mut messenger = TobyMessenger::new(stream);
-/// let receiver = messenger.start().unwrap();
-///
-/// loop {
-///     let msg = receiver.recv().unwrap();
-///     // echo msg back!
-///     messenger.send(msg);
-/// }
-///
-/// ```
-///
-// `TODO:` Make it clone/copyable, but for now use an `Arc<Mutex<>>` to make this threadsafe.
-pub struct TobyMessenger {
-    tcp_stream: TcpStream,
-    stop: Arc<AtomicBool>,
-    receiver_thread: Option<JoinHandle<()>>,
-    id: String,
-}
-
-impl TobyMessenger {
-    /// Create a new `TobyMessenger`.
-    pub fn new(tcp_stream: TcpStream) -> TobyMessenger {
-        TobyMessenger {
-            tcp_stream: tcp_stream,
-            receiver_thread: None,
-            stop: Arc::new(AtomicBool::new(false)),
-            id: Uuid::new_v4().hyphenated().to_string(),
-        }
-    }
-
-    /// Lets you see the id. Mostly for debugging, as we add the id when logging and to thread names.
-    pub fn id(&self) -> String {
-        self.id.clone()
-    }
-
-    /// Use your `TobyMessenger` to send data!
-    pub fn send(&mut self, data: Vec<u8>) -> io::Result<()> {
-        self.tcp_stream
-            .write_all(protocol::encode_tobytcp(data).as_slice())
-    }
-
-    /// Starts all of the threads and queues necessary to do work
-    ///
-    /// The returned [`Receiver`] is to be used to process messages received over the [`TcpStream`].
-    ///
-    /// [`TcpStream`]: https://doc.rust-lang.org/std/net/struct.TcpStream.html
-    /// [`Sender`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html
-    /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
-    pub fn start(&mut self) -> Result<(Receiver<Vec<u8>>), TobyMessengerError> {
-        if self.receiver_thread.is_some() {
-            debug!("Calling start on a TobyMessenger that has already started a thread!");
-            return Err(TobyMessengerError::AlreadyStartedError);
-        }
-
-        let (inbound_sender, inbound_receiver) = channel();
-        let stop_c = self.stop.clone();
-
-        let id_c = self.id.clone();
-        match self.tcp_stream.try_clone() {
-            Ok(stream) => {
-                self.receiver_thread = Some(match thread::Builder::new()
-                    .name(format!("toby_rec_{}", self.id).to_string())
-                    .spawn(move || {
-                        let mut rec = TobyReceiver {
-                            tcp_stream: stream,
-                            stop: stop_c,
-                            to_client_sender: inbound_sender,
-                            id: id_c,
-                        };
-                        rec.receive_data();
-                    }) {
-                    Ok(handle) => handle,
-                    Err(e) => return Err(TobyMessengerError::ThreadSpawnError(e)),
-                });
-            }
-            Err(e) => {
-                debug!("{}: Error cloning stream for consumer {}", self.id, e);
-                return Err(TobyMessengerError::StreamCloningError(e));
-            }
-        }
-
-        Ok(inbound_receiver)
-    }
-
-    /// Sends a signal to stop all of the threads, will not block on them actually shutting down.
-    pub fn stop_nonblock(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        match self.tcp_stream.shutdown(Shutdown::Both) {
-            Ok(()) => {}
-            Err(_) => trace!("Got an error while shutting down tcp stream, doing nothing"),
-        }
+    fn next(&mut self) -> Option<Self::Item> {
+        self.ready.pop_front()
     }
 }
 
@@ -248,246 +69,60 @@ fn bytes_to(bytes: &[u8]) -> u64 {
     ret
 }
 
-/// Goes from a u64 to usize
-/// TODO: This won't work for 32 bit machines, or at least it
-/// wont if the value is greater than u32::MAX
-fn to_usize(num: u64) -> usize {
-    num as usize
-}
-
 #[cfg(test)]
 mod tests {
-    use std::net::{TcpListener, TcpStream};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
-    use std::thread;
-    use std::time::Duration;
+    use super::protocol;
+    use super::TobyReceiver;
 
     #[test]
-    fn test_send_data() {
-        let barrier_main = Arc::new(Barrier::new(2));
-        let barrier = barrier_main.clone();
-        thread::spawn(move || {
-            let listener = TcpListener::bind("127.0.0.1:8032").unwrap();
-            barrier.wait();
+    pub fn send_one_receive_one() {
+        let data = vec![35; 31];
+        let verify = data.clone();
 
-            // Echo the data right back!!
-            for stream in listener.incoming() {
-                let mut messenger = super::TobyMessenger::new(stream.unwrap());
-                messenger.start().unwrap();
-                messenger.send(vec![123, 4, 8]).unwrap();
-            }
-        });
+        let encoded = protocol::encode_tobytcp(data);
 
-        barrier_main.wait();
-        let stream = TcpStream::connect("127.0.0.1:8032").unwrap();
-
-        let mut messenger = super::TobyMessenger::new(stream);
-        let receiver = messenger.start().unwrap();
-
-        assert_eq!(vec![123, 4, 8], receiver.recv().unwrap());
+        let mut tobyr = TobyReceiver::new();
+        tobyr.bark(encoded);
+        assert_eq!(verify, tobyr.next().unwrap());
+        assert_eq!(None, tobyr.next());
     }
 
     #[test]
-    fn test_echo_single() {
-        let barrier_main = Arc::new(Barrier::new(2));
-        let barrier = barrier_main.clone();
-        thread::spawn(move || {
-            let listener = TcpListener::bind("127.0.0.1:8031").unwrap();
-            barrier.wait();
+    pub fn send_partial_only_receive_once_all_sent() {
+        let mut data = vec![101; 88];
+        let verify = data.clone();
 
-            // Echo the data right back!!
-            for stream in listener.incoming() {
-                let mut messenger = super::TobyMessenger::new(stream.unwrap());
-                let receiver = messenger.start().unwrap();
-                messenger.send(receiver.recv().unwrap()).unwrap();
-            }
-        });
+        let mut encoded = protocol::encode_tobytcp(data);
 
-        barrier_main.wait();
-        let stream = TcpStream::connect("127.0.0.1:8031").unwrap();
+        let first_byte = encoded.drain(0..1).collect();
 
-        let mut messenger = super::TobyMessenger::new(stream);
-        let receiver = messenger.start().unwrap();
+        let mut tobyr = TobyReceiver::new();
 
-        let data = vec![31, 53, 74, 3, 67, 8, 4];
-        messenger.send(data.clone()).unwrap();
+        tobyr.bark(first_byte);
+        assert_eq!(None, tobyr.next());
 
-        // The message should be echo'd back
-        assert_eq!(data, receiver.recv().unwrap());
+        let len = encoded.len() / 2;
+        let more_bytes = encoded.drain(0..len).collect();
+        tobyr.bark(more_bytes);
+        assert_eq!(None, tobyr.next());
+
+        tobyr.bark(encoded);
+        assert_eq!(verify, tobyr.next().unwrap());
     }
 
     #[test]
-    fn test_echo_loop() {
-        let barrier_main = Arc::new(Barrier::new(2));
-        let barrier = barrier_main.clone();
-        thread::spawn(move || {
-            let listener = TcpListener::bind("127.0.0.1:8037").unwrap();
-            barrier.wait();
+    pub fn iterating_over_a_handful() {
+        let mut tobyr = TobyReceiver::new();
+        for i in 0..69 {
+            let data = vec![i];
+            let verify = data.clone();
 
-            // Echo the data right back!!
-            for stream in listener.incoming() {
-                let mut messenger = super::TobyMessenger::new(stream.unwrap());
-                let receiver = messenger.start().unwrap();
-                loop {
-                    let mut to_append: Vec<u8> = vec![8];
-                    let mut reply = receiver.recv().unwrap();
-                    reply.append(&mut to_append);
-                    messenger.send(reply).unwrap();
-                }
-            }
-        });
-
-        barrier_main.wait();
-        let stream = TcpStream::connect("127.0.0.1:8037").unwrap();
-
-        let mut messenger = super::TobyMessenger::new(stream);
-        let receiver = messenger.start().unwrap();
-
-        let mut ran = 0;
-        for i in 0..100 {
-            let mut data = vec![i];
-            messenger.send(data.clone()).unwrap();
-            let mut to_append: Vec<u8> = vec![8];
-            data.append(&mut to_append);
-            assert_eq!(data, receiver.recv().unwrap());
-            ran += 1;
-        }
-        assert_eq!(100, ran);
-    }
-
-    #[test]
-    fn test_concurrent_conns_writes() {
-        let num = 150;
-        let barrier_main = Arc::new(Barrier::new(num + 1));
-        let data_main = vec![16u8, 57u8, 3u8, 39u8, 123u8, 99u8, 134u8, 31u8];
-
-        for _ in 0..num {
-            let barrier = barrier_main.clone();
-            let data = data_main.clone();
-            thread::spawn(move || {
-                barrier.wait();
-
-                let stream = TcpStream::connect("127.0.0.1:8021").unwrap();
-                let mut messenger = super::TobyMessenger::new(stream);
-
-                messenger.send(data).unwrap();
-            });
+            let encoded = protocol::encode_tobytcp(data);
+            tobyr.bark(encoded);
         }
 
-        let listener = TcpListener::bind("127.0.0.1:8021").unwrap();
-
-        // This will be the 11th, and then the messages will be sent
-        barrier_main.wait();
-
-        let num_received = Arc::new(AtomicUsize::new(0));
-
-        let num_received_c = num_received.clone();
-
-        let test_complete = Arc::new(Barrier::new(2));
-        let test_complete_c = test_complete.clone();
-
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let mut messenger = super::TobyMessenger::new(stream.unwrap());
-                let r = messenger.start().unwrap();
-                assert_eq!(data_main, r.recv().unwrap());
-                if num_received_c.fetch_add(1, Ordering::Relaxed) == (num - 1) {
-                    test_complete_c.wait();
-                }
-            }
-        });
-
-        test_complete.wait();
-        assert_eq!(num, num_received.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn test_concurrent_conns_writes_big_data() {
-        let num = 100;
-        let barrier_main = Arc::new(Barrier::new(num + 1));
-        let mut data_main = vec![0u8; 113530];
-        let mut val = 0u8;
-        for i in 0..1153 {
-            if val == u8::max_value() {
-                val = 0u8;
-            }
-            data_main[i] = val;
-            val += 1;
+        for (i, data) in tobyr.enumerate() {
+            assert_eq!(vec![i as u8], data)
         }
-
-        for _ in 0..num {
-            let barrier = barrier_main.clone();
-            let data = data_main.clone();
-            thread::spawn(move || {
-                barrier.wait();
-
-                let stream = TcpStream::connect("127.0.0.1:8035").unwrap();
-                let mut messenger = super::TobyMessenger::new(stream);
-
-                messenger.send(data).unwrap();
-            });
-        }
-
-        let listener = TcpListener::bind("127.0.0.1:8035").unwrap();
-
-        // This will be the 11th, and then the messages will be sent
-        barrier_main.wait();
-
-        let num_received = Arc::new(AtomicUsize::new(0));
-
-        let num_received_c = num_received.clone();
-
-        let test_complete = Arc::new(Barrier::new(2));
-        let test_complete_c = test_complete.clone();
-
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let mut messenger = super::TobyMessenger::new(stream.unwrap());
-                let r = messenger.start().unwrap();
-                let received = r.recv().unwrap();
-                assert_eq!(113530, received.len());
-                assert_eq!(data_main, received);
-                if num_received_c.fetch_add(1, Ordering::Relaxed) == num - 1 {
-                    test_complete_c.wait();
-                }
-            }
-        });
-
-        test_complete.wait();
-        assert_eq!(num, num_received.load(Ordering::Relaxed));
-    }
-
-    // Lets say you want to tcp send, but dont care to connect. You can
-    // just not `start` it!
-    #[test]
-    fn test_writes_no_recv() {
-        let got_msg = Arc::new(AtomicBool::new(false));
-        let data = vec![15u8, 103u8, 7u8];
-
-        let barrier_main = Arc::new(Barrier::new(2));
-
-        let data_c = data.clone();
-        let got_msg_c = got_msg.clone();
-        let barrier = barrier_main.clone();
-        thread::spawn(move || {
-            let listener = TcpListener::bind("127.0.0.1:8099").unwrap();
-            barrier.wait();
-            // Echo the data right back!!
-            for stream in listener.incoming() {
-                let mut messenger = super::TobyMessenger::new(stream.unwrap());
-                let r = messenger.start().unwrap();
-                assert_eq!(data_c, r.recv().unwrap());
-                got_msg_c.store(true, Ordering::Relaxed);
-            }
-        });
-
-        barrier_main.wait();
-        let stream = TcpStream::connect("127.0.0.1:8099").unwrap();
-
-        let mut messenger = super::TobyMessenger::new(stream);
-        messenger.send(data).unwrap();
-        thread::sleep(Duration::from_millis(10));
-        assert!(got_msg.load(Ordering::Relaxed));
     }
 }
