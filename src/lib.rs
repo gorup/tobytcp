@@ -17,7 +17,6 @@ impl TobyReceiver {
         }
     }
 
-    // consumes tcp stream, sends finished messages to Sender's corresponding receiver
     fn bark(&mut self, mut data: Vec<u8>) {
         self.raw_buff.append(&mut data);
 

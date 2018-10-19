@@ -1,53 +1,36 @@
-//! This module has a helper for encoding data to TobyTcp
+/// Provides the length of the data, but also the number of bytes in the
+/// provided data that represent the length of the data. In short, you should
+/// ignore <retval.1> bytes and process the next <retval.1> bytes as data.
+pub fn decode_tobytcp2(bytes: &[u8]) -> (u64, u8) {
+    let mut len: u64 = 0;
+    let mut i = 0;
+    for byte in bytes.iter() {
+        i += 1;
+        len |= *byte as u64 & 0b0111_1111_u64;
+        if *byte > 127 {
+            len <<= 7;
+        }
+    }
 
-/// Call this with your data, and the returned buffer will be a properly
-/// encoded `TobyTcp` message that can be sent!
-pub fn encode_tobytcp(mut message: Vec<u8>) -> Vec<u8> {
-    let data_len_64 = message.len() as u64;
-    data_len_64.to_le();
-
-    let mut encoded = bytes_from(data_len_64).to_vec();
-    encoded.append(&mut message);
-    encoded
+    (len, i)
 }
 
-/// Goes from a single u64 to 8xu8
-fn bytes_from(mut num: u64) -> [u8; 8] {
-    let mut ret = [0u8; 8];
+/// Returns the prefix you should use to represent num_bytes using tobytcp2
+pub fn tobytcp2_prefix(mut len: u64) -> Vec<u8> {
+    let mut ret: Vec<u8> = Vec::new();
 
-    for (i, _) in (0..7).enumerate() {
-        ret[7 - i] = (num & 0b1111_1111_u64) as u8;
-        num = num >> 8;
+    ret.push(len as u8 & 0b0111_1111);
+    while len > 127 {
+        len >>= 7;
+        ret.push(len as u8 | 0b1000_0000);
     }
+
+    ret.reverse();
     ret
 }
 
-    // the left-most bit defines if the next bit is needed
-    // if you read the right 7 bits, thats the length, the left
-    // most bit is never part of the size
-// grows like toby
-pub fn encode_tobytcp2(mut message: Vec<u8>) -> Vec<u8> {
-    let mut prefix = tobytcp2_prefix(message.len() as u64);
-
-    prefix.append(&mut message);
-    prefix
-}
-
-pub fn tobytcp2_prefix(mut num_bytes: u64) -> Vec<u8> {
-    let mut bytes_backwards: Vec<u8> = Vec::new();
-
-    // while the number is greater than u7 max..
-    while num_bytes > (u8::max_value() >> 1).into() {
-        bytes_backwards.push((num_bytes | 0b1000_0000_u64) as u8);
-        num_bytes = num_bytes >> 7;
-    }
-    bytes_backwards.push((num_bytes | 0b0000_0000_u64) as u8);
-    bytes_backwards.reverse();
-    bytes_backwards
-}
-
 #[cfg(test)]
-mod tests {
+mod tobytcp_tests {
     #[test]
     fn encode_single_byte() {
         let message = vec![100, 13, 69, 17];
@@ -66,48 +49,47 @@ mod tests {
 
         assert_eq!(expected, encoded);
     }
+}
 
+#[cfg(test)]
+mod tobytcp2_tests {
+    use super::*;
     #[test]
-    fn encoded2() {
-        let message = vec![100, 13, 69, 17];
-        let encoded = super::encode_tobytcp2(message);
-        // We had 4 bytes of data
-        assert_eq!(vec![4, 100, 13, 69, 17], encoded);
+    fn mega_test() {
+        assert_eq!((3, 1), decode_tobytcp2(&vec![0b0000_0011][..]));
+        assert_eq!((131, 2), decode_tobytcp2(&vec![0b1000_0001, 0b0000_0011][..]));
+        assert_eq!((66819, 3), decode_tobytcp2(&vec![0b1000_0100, 0b1000_1010, 0b0000_0011][..]));
+
+        assert_eq!(vec![0b1000_0100, 0b1000_1010, 0b0000_0011], tobytcp2_prefix(66819));
+        assert_eq!(vec![0b1000_0001, 0b0000_0011], tobytcp2_prefix(131));
+        assert_eq!(vec![0b0000_0011], tobytcp2_prefix(3));
+
+        let length = 338;
+        let encoded_len = tobytcp2_prefix(length);
+
+        let (decoded_length, length_length) = decode_tobytcp2(&encoded_len[..]);
+        assert_eq!(length, decoded_length);
+        assert_eq!(2, length_length);
     }
 
     #[test]
-    fn encoded2_two_bytes() {
-        let encoded_pre = super::tobytcp2_prefix(127);
-        assert_eq!(vec![0b0111_1111], encoded_pre);
-
-        let encoded_barely = super::tobytcp2_prefix(128);
-        assert_eq!(vec![0b0000_0001, 0b1000_0000], encoded_barely);
-
-        let encoded_max = super::tobytcp2_prefix(255);
-        assert_eq!(vec![0b0000_0001, 0b1111_1111], encoded_max);
-
-        let encoded = super::tobytcp2_prefix(256);
-        assert_eq!(vec![0b0000_0010, 0b1000_0000], encoded);
-
-        let encoded2 = super::tobytcp2_prefix(257);
-        assert_eq!(vec![0b0000_0010, 0b1000_0001], encoded2);
-
-        let encoded3 = super::tobytcp2_prefix(258);
-        assert_eq!(vec![0b0000_0010, 0b1000_0010], encoded3);
-
-        let encoded4 = super::tobytcp2_prefix(259);
-        assert_eq!(vec![0b0000_0010, 0b1000_0011], encoded4);
-
-        let encoded5 = super::tobytcp2_prefix(683);
-        assert_eq!(vec![0b0000_0101, 0b1010_1011], encoded5);
+    fn loop_u7_max() {
+        // for all things that can be represented in 7 bits
+        for length in 0..=127 {
+            let encoded_len = tobytcp2_prefix(length);
+            let (decoded_length, length_length) = decode_tobytcp2(&encoded_len[..]);
+            assert_eq!(length, decoded_length);
+            assert_eq!(1, length_length);
+        }
     }
 
     #[test]
-    fn encoded2_4_bytes() {
-        //72143031
-        //   0100 0100 1100 1101 0000 1011 0111_2
-        //   010 0010 011 0011 010 0001 011 0111_2
-        let encoded = super::tobytcp2_prefix(72143031);
-        assert_eq!(vec![0b0010_0010, 0b1011_0011, 0b1010_0001, 0b1011_0111], encoded);
+    fn loop_u14_max() {
+        for length in 128..=16383 {
+            let encoded_len = tobytcp2_prefix(length);
+            let (decoded_length, length_length) = decode_tobytcp2(&encoded_len[..]);
+            assert_eq!(length, decoded_length);
+            assert_eq!(2, length_length);
+        }
     }
 }
