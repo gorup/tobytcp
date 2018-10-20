@@ -1,34 +1,48 @@
 pub mod protocol;
 
+extern crate either;
+
 use std::collections::VecDeque;
+use either::{Either, Left, Right};
 
 pub struct TobyReceiver {
-    raw_buff: Vec<u8>,
-    curr_size: Option<u64>,
+    length: Option<(u64, u8)>,
+    in_progress_length: Option<(u64, u8)>,
     ready: VecDeque<Vec<u8>>,
+    unready: VecDeque<Vec<u8>>,
 }
 
 impl TobyReceiver {
-    fn new() -> Self {
+    pub fn new() -> Self {
         TobyReceiver {
-            curr_size: None,
-            raw_buff: Vec::new(),
-            ready: VecDeque::new(),
+            length: None, in_progress_length: None,
+            ready: VecDeque::new(), unready: VecDeque::new(),
         }
     }
 
-    fn bark(&mut self, mut data: Vec<u8>) {
-        self.raw_buff.append(&mut data);
+    pub fn bark(&mut self, mut data: Vec<u8>) {
+        self.unready.push_back(data);
+        self.process();
+    }
 
-        self.curr_size = compute_curr_size(self.curr_size, &mut self.raw_buff);
-        while self.curr_size.is_some() && self.raw_buff.len() >= self.curr_size.unwrap() as usize {
-            // get the data out!
-            let parsed_message = self.raw_buff.drain(0..self.curr_size.unwrap() as usize).collect();
+    fn process(&mut self) {
+        if self.length.is_none() {
+            let mut prev_right = None;
 
-            // reset the size, ugly!
-            self.curr_size = compute_curr_size(None, &mut self.raw_buff);
+            // Provide decode with our bufs until we get a length
+            for buf in self.unready.iter() {
+                match protocol::decode_tobytcp2(&buf[..], prev_right) {
+                    Left(finished) => {
+                        self.length = Some(finished);
+                        self.in_progress_length = None;
+                        break;
+                    }
+                    Right(unfinished) => self.in_progress_length = Some(unfinished),
+                }
+            }
+        }
 
-            self.ready.push_back(parsed_message);
+        if self.length.is_some() {
         }
     }
 }
@@ -41,35 +55,9 @@ impl Iterator for TobyReceiver {
     }
 }
 
-fn compute_curr_size(curr_size: Option<u64>, buf: &mut Vec<u8>) -> Option<u64> {
-    if curr_size.is_none() {
-        if buf.len() >= 8 {
-            let size = Some(bytes_to(&buf[0..8]));
-            buf.drain(0..8);
-            return size;
-        }
-        None
-    } else {
-        curr_size
-    }
-}
-
-/// Goes from a slice of bytes to a u64.
-fn bytes_to(bytes: &[u8]) -> u64 {
-    let mut ret = 0u64;
-    let mut i = 0; // hacky
-    for byte in bytes {
-        ret = ret | *byte as u64;
-        if i < 7 {
-            ret = ret << 8;
-        }
-        i = i + 1;
-    }
-    ret
-}
-
 #[cfg(test)]
 mod tests {
+    /*
     use super::protocol;
     use super::TobyReceiver;
 
@@ -124,4 +112,5 @@ mod tests {
             assert_eq!(vec![i as u8], data)
         }
     }
+*/
 }

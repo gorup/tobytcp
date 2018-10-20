@@ -10,5 +10,4 @@ license-file = "LICENSE"
 readme="README.md"
 
 [dependencies]
-log = "0.4"
-uuid = { version = "0.6", features = ["v4"] }
+either = "1.5.0"
