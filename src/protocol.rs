@@ -51,6 +51,18 @@ mod tobytcp2_tests {
     }
 
     #[test]
+    fn test_finish_partial() {
+        let vec = vec![0b1000_0001, 0b0000_00011];
+        let first = decode_tobytcp2(&vec[0..1], None);
+        assert!(first.is_right());
+        assert_eq!((128, 1), first.right().unwrap());
+
+        let second = decode_tobytcp2(&vec[1..], first.right());
+        assert!(second.is_left());
+        assert_eq!((131, 2), second.left().unwrap());
+    }
+
+    #[test]
     fn mega_test() {
         assert_eq!((3, 1), decode_tobytcp2(&vec![0b0000_0011][..], None).left().unwrap());
         assert_eq!((131, 2), decode_tobytcp2(&vec![0b1000_0001, 0b0000_0011][..], None).left().unwrap());
