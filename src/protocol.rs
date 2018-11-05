@@ -1,45 +1,85 @@
-//! This module has a helper for encoding data to TobyTcp
-
-/// Call this with your data, and the returned buffer will be a properly
-/// encoded `TobyTcp` message that can be sent!
-pub fn encode_tobytcp(mut message: Vec<u8>) -> Vec<u8> {
-    let data_len_64 = message.len() as u64;
-    data_len_64.to_le();
-
-    let mut encoded = bytes_from(data_len_64).to_vec();
-    encoded.append(&mut message);
-    encoded
+/// For some size, get the prefix that represents that size
+pub fn tobytcp_prefix(num: usize) -> [u8; 8] {
+    num.to_be_bytes()
 }
 
-/// Goes from a single u64 to 8xu8
-fn bytes_from(mut num: u64) -> [u8; 8] {
-    let mut ret = [0u8; 8];
-
-    for (i, _) in (0..7).enumerate() {
-        ret[7 - i] = (num & 0b1111_1111_u64) as u8;
-        num = num >> 8;
+/// For a buffer, grab the length (None if less than 8 bytes..)
+pub fn tobytcp_length(buf: &[u8]) -> Option<u64> {
+    if buf.len() < 7 {
+        return None
     }
-    ret
+    let mut bytes = [0; 8];
+    bytes.copy_from_slice(&buf[0..8]);
+    Some(u64::from_be_bytes(bytes))
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn encode_single_byte() {
-        let message = vec![100, 13, 69, 17];
-        let encoded = super::encode_tobytcp(message);
-        // We had 4 bytes of data
-        assert_eq!(vec![0, 0, 0, 0, 0, 0, 0, 4, 100, 13, 69, 17], encoded);
+    fn tobytcp_prefix_u8() {
+        for i in 0..=255 {
+            assert_eq!([0,0,0,0,0,0,0,i], super::tobytcp_prefix(i as usize));
+        }
     }
 
     #[test]
-    fn encode_bigger_message() {
-        let data = vec![69; 257];
-        let mut expected = vec![0, 0, 0, 0, 0, 0, 1, 1];
-        expected.append(&mut data.clone());
+    fn tobytcp_prefix_spotchecks() {
+        assert_eq!([0,0,0,0,0,0,1,0], super::tobytcp_prefix(256));
+        assert_eq!([0,0,0,0,0,0,1,1], super::tobytcp_prefix(257));
+        assert_eq!([0,0,0,0,0,0,2,0], super::tobytcp_prefix(512));
+        assert_eq!([0,0,0,0,0,0,2,89], super::tobytcp_prefix(601));
+        assert_eq!([0,0,0,0,0,0,4,0], super::tobytcp_prefix(1024));
+        assert_eq!([0,0,0,0,0,0,8,0], super::tobytcp_prefix(2048));
+        assert_eq!([0,0,0,0,0,0,9,9], super::tobytcp_prefix(2313));
+    }
 
-        let encoded = super::encode_tobytcp(data);
+    #[test]
+    fn tobytcp_length_u8() {
+        for i in 0..=255 {
+            assert_eq!(i as u64, super::tobytcp_length(&[0,0,0,0,0,0,0,i]).unwrap());
+        }
+    }
 
-        assert_eq!(expected, encoded);
+    #[test]
+    fn tobytcp_length_spotchecks() {
+        assert_eq!(257, super::tobytcp_length(&[0,0,0,0,0,0,1,1]).unwrap());
+        assert_eq!(601, super::tobytcp_length(&[0,0,0,0,0,0,2,89]).unwrap());
+        assert_eq!(1024, super::tobytcp_length(&[0,0,0,0,0,0,4,0]).unwrap());
+        assert_eq!(14131, super::tobytcp_length(&[0,0,0,0,0,0,55,51]).unwrap());
+    }
+
+    #[test]
+    fn tobytcp_equal_prefix_of_length_u8() {
+        for i in 0..=255 {
+            let expected = [0,0,0,0,0,0,0,i];
+            assert_eq!(expected, super::tobytcp_prefix(super::tobytcp_length(&expected).unwrap() as usize));
+        }
+    }
+
+    #[test]
+    fn tobytcp_equal_length_of_prefix() {
+        for i in 0..=1535 {
+            assert_eq!(i as u64, super::tobytcp_length(&super::tobytcp_prefix(i)).unwrap());
+        }
+    }
+
+    #[test]
+    fn tobytcp_equal_prefix_of_length_spotchecks() {
+        {
+            let expected = [0,0,0,0,0,0,1,1];
+            assert_eq!(expected, super::tobytcp_prefix(super::tobytcp_length(&expected).unwrap() as usize));
+        }
+        {
+            let expected = [0,0,0,0,0,0,1,0];
+            assert_eq!(expected, super::tobytcp_prefix(super::tobytcp_length(&expected).unwrap() as usize));
+        }
+        {
+            let expected = [0,40,0,1,0,31,0,131];
+            assert_eq!(expected, super::tobytcp_prefix(super::tobytcp_length(&expected).unwrap() as usize));
+        }
+        {
+            let expected = [0,0,0,0,0,0,55,51];
+            assert_eq!(expected, super::tobytcp_prefix(super::tobytcp_length(&expected).unwrap() as usize));
+        }
     }
 }
