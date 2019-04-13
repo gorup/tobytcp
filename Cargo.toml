@@ -8,7 +8,6 @@ repository = "https://github.com/gorup/tobytcp"
 description = "A little library for sending messages over a raw tcp stream"
 license-file = "LICENSE"
 readme="README.md"
+edition = "2018"
 
 [dependencies]
-log = "0.4"
-uuid = { version = "0.6", features = ["v4"] }
