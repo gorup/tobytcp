@@ -1,35 +1,35 @@
 # `tobytcp`
 
-This package contains the `tobytcp::TobyMessenger` struct that provides the ability to talk **TobyTcp** over a `Write`, but usually a `TcpStream`.
+TobyTcp is a protocol that allows for the use of a raw `tcp` stream for communicating messages, bi-directionally. It frames the messages with a length prefix to deliniate messages. This library provides methods to encode/decode that message prefix, but also provides `async` send & receive methods.
 
-TobyTcp is a protocol that allows for the use of a raw `tcp` stream for communicating messages, bi-directionally. See below for more details.
-
-**NOTE**: Not ready for Production use. See below [Disclaimer](#disclaimer) section.
+**NOTE**: Maybe ready for Production use. See below [Disclaimer](#disclaimer) section.
 
 # [Documentation](https://docs.rs/tobytcp)
 
 ## Writing
+Look at the `/examples` and the unit tests for compiling examples!
 ```
 let prefix = protocol::tobytcp_prefix(data.len());
 
 stream.write_all(&prefix)?;
 stream.write_all(&data)?;
 
-// OR use the send method in lib, which does exactly ^
-send(&data, stream)?;
+// OR use the send method in lib, which does almost exactly ^
+send(&mut data, &mut stream).await?;
 ```
 
 ## Reading
+Look at the `/examples` and the unit tests for compiling examples!
 ```
-num_read += stream.read(&mut buf)?;
-let length = protocol::tobytcp_length(&buf);
+let mut len_buf = [0; 8];
+stream.read_exact(&mut len_buf)?;
+let length = protocol::tobytcp_len(len_buf);
 
-if length.is_none || num_read < length.unwrap() {
-    // keep reading, we don't have enough data
-    continue;
-}
+let mut msg_buf = [0; length as usize];
+stream.read_exact(&mut msg_buf)?; // Done, we have received the message into msg_buf
 
-let data = buf[protocol::tobytcp_length_to_range(length)];
+// OR use the receive method in lib which does almost exactly ^
+let data = receive(&mut buf, &mut stream).await?;;
 ```
 
 ## TobyTcp Protocol
@@ -50,6 +50,8 @@ Here is an example of an encoded messages. The message has `18` bytes of data, a
 Also see the `protocol` tests to see what is expected!
 
 ## Disclaimer
+- This library provides `async` methods that are not usable with stable rust (check out [areweasyncyet](https://areweasyncyet.rs/)!), which is a large blocker for me considering this `1.0`.
+  - I could put the `async` methods behind a 'feature', but I'm unsure how to do that and no-one uses this so...
 - Untested on `32` bit machines, not sure it will work!
 
 ## License

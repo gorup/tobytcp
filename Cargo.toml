@@ -2,12 +2,17 @@
 name = "tobytcp"
 version = "0.12.0"
 authors = ["Ryan Gorup"]
-categories = ["tcp"]
-keywords = ["tcp"]
+categories = ["tcp", "asyncio", "async"]
+keywords = ["tcp", "asyncio", "async"]
 repository = "https://github.com/gorup/tobytcp"
-description = "A little library for sending messages over a raw tcp stream"
+description = "A little library for sending messages over a tcp stream"
 license-file = "LICENSE"
 readme="README.md"
 edition = "2018"
 
 [dependencies]
+futures-preview = { version = "0.3.0-alpha.16", features = ["compat", "io-compat"] }
+
+[dev-dependencies]
+runtime = "0.3.0-alpha.5"
+romio = "0.3.0-alpha.8"
