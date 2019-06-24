@@ -1,6 +1,6 @@
 [package]
 name = "tobytcp"
-version = "0.12.0"
+version = "0.13.0"
 authors = ["Ryan Gorup"]
 categories = ["tcp", "asyncio", "async"]
 keywords = ["tcp", "asyncio", "async"]
