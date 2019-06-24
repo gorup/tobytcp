@@ -6,6 +6,9 @@ use romio::{TcpListener, TcpStream};
 use futures::StreamExt;
 use tobytcp::{receive, send};
 
+// You can run this example by running `cargo run --example echo`
+//
+// Note it panics once Bob disconnects..
 #[runtime::main]
 async fn main() {
     join(run_bob(), run_alice()).await;

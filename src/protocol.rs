@@ -2,24 +2,24 @@
 //! Getting the `tobytcp` length prefix that will preceed the data
 //! ```
 //! use tobytcp::protocol::tobytcp_prefix;
-//! 
+//!
 //! let data = vec![1, 2, 3];
-//! 
+//!
 //! let mut len_buf = tobytcp_prefix(data.len()); // Send `len_buf` first, then `data`
 //! ```
-//! 
+//!
 //! Decoding the length of an inbound `tobytcp` message from a stream
 //! ```no_run
 //! # use std::net::TcpStream;
 //! # use std::io::Read;
 //! use tobytcp::protocol::tobytcp_len;
-//! 
+//!
 //! # let mut stream = TcpStream::connect("127.0.0.1:7070").unwrap();
 //! let mut len_buf = [0; 8];
 //! stream.read(&mut len_buf);
-//! 
+//!
 //! let msg_len = tobytcp_len(len_buf);
-//! 
+//!
 //! // Now we know that the next message payload is `msg_len` bytes in length..
 //! ```
 

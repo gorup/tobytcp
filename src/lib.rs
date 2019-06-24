@@ -3,29 +3,29 @@
 //! `tobytcp` is a library used when sending messages over a buffer, typically an async `TcpStream`.
 //!
 //! It uses length-prefixing to allow the receiver to differentiate different messages
-//! 
+//!
 //! # Examples
 //! Here is a tiny example of what it looks like to use `TobyTcp`'s built-in `send` and `receive` fns. Also look at the `/examples` directory
 //! and unit tests in the source code for concrete uses of this library.
-//! 
+//!
 //! ```no_run
 //! #![feature(async_await)]
 //! # use romio::TcpStream;
 //! # use tobytcp::{send, receive};
-//! 
+//!
 //! # async fn toby() -> Result<u64, std::io::Error> { // For some reason when I do Result<(), std::io::Error> it complains a ton..
 //! # let mut stream = TcpStream::connect(&"127.0.0.1:7070".parse().unwrap()).await?;
 //! let mut buf = vec![1, 2, 3];
 //! send(&mut buf, &mut stream).await?;
-//! 
+//!
 //! // Pretend we're connected to an echo server..
 //! let received = receive(&mut stream).await?;
-//! 
+//!
 //! assert_eq!(buf, received);
 //! # Ok(8)
 //! # };
 //! ```
-//! 
+//!
 
 /// Includes methods for generating the `tobytcp` prefix, or attempting to decode the length of
 /// the encoded data i.e. payload, from a buffer.
@@ -52,9 +52,9 @@ where
 
 /// Wait for data, which was encoded as `tobytcp`, to be received from this `Read`. Returns the data or any error.
 /// See the `examples/` dir in the source code, or the tests of this fn in the source code for some examples of this being used.
-/// 
+///
 /// Note: Do *not* perform any IO on the `Read` outside of calling `send` or `receive`! It can corrupt the tobytcp stream
-pub async fn receive<'r, R>(read: &'r mut R) -> Result<Vec<u8>, io::Error>
+pub async fn receive<R>(read: &mut R) -> Result<Vec<u8>, io::Error>
 where
     R: AsyncRead + Unpin,
 {

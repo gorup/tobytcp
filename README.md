@@ -8,7 +8,7 @@ TobyTcp is a protocol that allows for the use of a raw `tcp` stream for communic
 
 ## Writing
 Look at the `/examples` and the unit tests for compiling examples!
-```
+```rust
 let prefix = protocol::tobytcp_prefix(data.len());
 
 stream.write_all(&prefix)?;
@@ -20,7 +20,7 @@ send(&mut data, &mut stream).await?;
 
 ## Reading
 Look at the `/examples` and the unit tests for compiling examples!
-```
+```rust
 let mut len_buf = [0; 8];
 stream.read_exact(&mut len_buf)?;
 let length = protocol::tobytcp_len(len_buf);
